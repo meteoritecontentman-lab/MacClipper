@@ -1,0 +1,25 @@
+name: IosClipper
+options:
+  bundleIdPrefix: local
+  deploymentTarget:
+    iOS: "16.0"
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+
+targets:
+  IosClipper:
+    type: application
+    platform: iOS
+    sources:
+      - Sources/IosClipper
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: local.iosclipper.app
+        INFOPLIST_FILE: Sources/IosClipper/Info.plist
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: ""
+        TARGETED_DEVICE_FAMILY: "1"
+    info:
+      path: Sources/IosClipper/Info.plist

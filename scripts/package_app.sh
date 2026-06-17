@@ -91,15 +91,6 @@ resolve_signing_identity() {
     return
   fi
 
-  if [[ "$BUILD_TYPE" == "appstore" ]]; then
-    local apple_distribution
-    apple_distribution="$(security find-identity -v -p codesigning 2>/dev/null | awk -F '"' '/Apple Distribution/ { print $2; exit }')"
-    if [[ -n "$apple_distribution" ]]; then
-      printf '%s\n' "$apple_distribution"
-      return
-    fi
-  fi
-
   local developer_id
   developer_id="$(security find-identity -v -p codesigning 2>/dev/null | awk -F '"' '/Developer ID Application/ { print $2; exit }')"
   if [[ -n "$developer_id" ]]; then
@@ -211,50 +202,23 @@ if [[ "$RESOLVED_ACCOUNT_PORTAL_URL" == http://127.0.0.1:* || "$RESOLVED_ACCOUNT
   echo "Warning: MacClipperAccountPortalURL resolves to $RESOLVED_ACCOUNT_PORTAL_URL. Builds installed on other Macs will not register installs or sync entitlements unless you override it with MACCLIPPER_ACCOUNT_PORTAL_URL or MACCLIPPER_API_BASE_URL." >&2
 fi
 
-if [[ "$BUILD_TYPE" == "appstore" ]]; then
-    # Strip Sparkle auto-update keys for App Store builds
-    delete_key "$DIST_DIR/Contents/Info.plist" ':SUFeedURL'
-    delete_key "$DIST_DIR/Contents/Info.plist" ':SUPublicEDKey'
-    delete_key "$DIST_DIR/Contents/Info.plist" ':SUScheduledCheckInterval'
-    delete_key "$DIST_DIR/Contents/Info.plist" ':SUEnableAutomaticChecks'
-    delete_key "$DIST_DIR/Contents/Info.plist" ':SUVerifyUpdateBeforeExtraction'
-    configure_bool_key "$DIST_DIR/Contents/Info.plist" ':MacClipperEnableUpdater' false
-
-    # Embed App Store sandbox entitlements
-    if [[ -f "$ROOT/AppResources/MacClipper.entitlements" ]]; then
-        /usr/bin/codesign --force --deep --sign "$SIGNING_IDENTITY" \
-            --entitlements "$ROOT/AppResources/MacClipper.entitlements" \
-            --options runtime "$DIST_DIR"
-    fi
-else
-    SPARKLE_FRAMEWORK="$(find_sparkle_framework "$BUILD_DIR")"
-    /usr/bin/ditto "$SPARKLE_FRAMEWORK" "$DIST_DIR/Contents/Frameworks/Sparkle.framework"
-fi
+SPARKLE_FRAMEWORK="$(find_sparkle_framework "$BUILD_DIR")"
+/usr/bin/ditto "$SPARKLE_FRAMEWORK" "$DIST_DIR/Contents/Frameworks/Sparkle.framework"
 
 chmod +x "$DIST_DIR/Contents/MacOS/$APP_NAME"
 /usr/bin/strip -Sx "$DIST_DIR/Contents/MacOS/$APP_NAME" >/dev/null 2>&1 || true
 
 SIGNING_IDENTITY="$(resolve_signing_identity)"
 
-if [[ "$BUILD_TYPE" == "appstore" ]]; then
-  codesign --force --deep --sign "$SIGNING_IDENTITY" \
-    --entitlements "$ROOT/AppResources/MacClipper.entitlements" \
-    --options runtime "$DIST_DIR"
-  configure_integrity_policy "$DIST_DIR/Contents/Info.plist" false ""
-  codesign --force --deep --sign "$SIGNING_IDENTITY" \
-    --entitlements "$ROOT/AppResources/MacClipper.entitlements" \
-    --options runtime "$DIST_DIR"
+codesign_app_bundle "$DIST_DIR" "$BUNDLE_ID"
+TEAM_IDENTIFIER="$(resolve_codesign_team_identifier "$DIST_DIR")"
+if [[ -n "$SIGNING_IDENTITY" && -n "$TEAM_IDENTIFIER" ]]; then
+  configure_integrity_policy "$DIST_DIR/Contents/Info.plist" true "$TEAM_IDENTIFIER"
 else
-  codesign_app_bundle "$DIST_DIR" "$BUNDLE_ID"
-  TEAM_IDENTIFIER="$(resolve_codesign_team_identifier "$DIST_DIR")"
-  if [[ -n "$SIGNING_IDENTITY" && -n "$TEAM_IDENTIFIER" ]]; then
-    configure_integrity_policy "$DIST_DIR/Contents/Info.plist" true "$TEAM_IDENTIFIER"
-  else
-    configure_integrity_policy "$DIST_DIR/Contents/Info.plist" false ""
-  fi
-  codesign_app_bundle "$DIST_DIR" "$BUNDLE_ID"
-  notarize_and_staple_app "$DIST_DIR"
+  configure_integrity_policy "$DIST_DIR/Contents/Info.plist" false ""
 fi
+codesign_app_bundle "$DIST_DIR" "$BUNDLE_ID"
+notarize_and_staple_app "$DIST_DIR"
 
 if [[ -n "$SIGNING_IDENTITY" ]]; then
   echo "Built and signed $DIST_DIR for $TARGET_ARCH with $SIGNING_IDENTITY"

@@ -1,6 +1,5 @@
 import SwiftUI
 import AppKit
-import StoreKit
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -23,13 +22,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menuBarStatusItemController = MenuBarStatusItemController(model: model)
         AppIntegrityMonitor.verifyCurrentAppBundleAtLaunch()
         discordRichPresenceManager.start()
-        refreshReceipt()
-    }
-
-    private func refreshReceipt() {
-        let request = SKReceiptRefreshRequest()
-        request.delegate = self
-        request.start()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -71,26 +63,5 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let urls = pendingIncomingURLs
         pendingIncomingURLs = []
         return urls
-    }
-}
-
-extension AppDelegate: SKRequestDelegate {
-    nonisolated func requestDidFinish(_ request: SKRequest) {
-        guard let receiptURL = Bundle.main.appStoreReceiptURL,
-              FileManager.default.fileExists(atPath: receiptURL.path) else {
-            Task { @MainActor in
-                AppLogger.shared.log("Receipt", "No App Store receipt found")
-            }
-            return
-        }
-        Task { @MainActor in
-            AppLogger.shared.log("Receipt", "App Store receipt validated at \(receiptURL.path)")
-        }
-    }
-
-    nonisolated func request(_ request: SKRequest, didFailWithError error: Error) {
-        Task { @MainActor in
-            AppLogger.shared.log("Receipt", "Receipt refresh failed: \(error.localizedDescription)")
-        }
     }
 }
