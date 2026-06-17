@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 enum PaidFeatureKey: String, CaseIterable, Codable {
     case fourKPro = "4k-pro"
@@ -36,5 +37,20 @@ enum FeatureActivationManager {
             .split(separator: "-")
             .map { $0.capitalized }
             .joined(separator: " ")
+    }
+
+    static func verifyEntitlementHMAC(payload: Data, signature: String, machineIdentifier: String) -> Bool {
+        let keyData = Data("\(machineIdentifier)-macclipper-entitlement-salt".utf8)
+        let key = SymmetricKey(data: keyData)
+        let expectedCode = HMAC<SHA256>.authenticationCode(for: payload, using: key)
+        let expectedString = Data(expectedCode).map { String(format: "%02x", $0) }.joined()
+        return signature == expectedString
+    }
+
+    static func computeEntitlementHMAC(payload: Data, machineIdentifier: String) -> String {
+        let keyData = Data("\(machineIdentifier)-macclipper-entitlement-salt".utf8)
+        let key = SymmetricKey(data: keyData)
+        let code = HMAC<SHA256>.authenticationCode(for: payload, using: key)
+        return Data(code).map { String(format: "%02x", $0) }.joined()
     }
 }

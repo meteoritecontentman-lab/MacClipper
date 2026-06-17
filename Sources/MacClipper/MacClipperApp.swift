@@ -1,14 +1,31 @@
 import SwiftUI
+import Darwin
 
 @main
 struct MacClipperApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+
+    init() {
+        if detectDebugger() {
+            AppLogger.shared.log("Security", "debugger detected via sysctl")
+        }
+    }
 
     var body: some Scene {
         Settings {
             EmptyView()
         }
     }
+}
+
+private func detectDebugger() -> Bool {
+    var info = kinfo_proc()
+    var size = MemoryLayout<kinfo_proc>.stride
+    var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, getpid()]
+    guard sysctl(&mib, UInt32(mib.count), &info, &size, nil, 0) == 0 else {
+        return false
+    }
+    return (info.kp_proc.p_flag & P_TRACED) != 0
 }
 
 struct MenuContentView: View {

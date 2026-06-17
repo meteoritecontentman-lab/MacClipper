@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 struct PersistedAppSettings: Codable {
     var clipDuration: Double
@@ -39,11 +40,13 @@ private struct PersistedAppSettingsEnvelope: Codable {
     let machineIdentifier: String?
     let savedAt: Date
     let settings: PersistedAppSettings
+    let signature: String?
 }
 
 final class MachineSettingsStore {
     private static let schemaVersion = 1
     private static let settingsFileName = "settings.json"
+    private static let hmacSecretSalt = "macclipper-secret-salt"
 
     let settingsFileURL: URL
 
@@ -63,7 +66,13 @@ final class MachineSettingsStore {
     func loadSettings() -> PersistedAppSettings? {
         if let data = try? Data(contentsOf: settingsFileURL),
            let envelope = try? JSONDecoder().decode(PersistedAppSettingsEnvelope.self, from: data) {
-            return envelope.settings
+            var settings = envelope.settings
+            if let signature = envelope.signature, !signature.isEmpty {
+                if !verifySettingsSignature(data: data, signature: signature) {
+                    settings.unlockedPaidFeatures = []
+                }
+            }
+            return settings
         }
 
         return migrateLegacySettingsIfNeeded()
@@ -77,13 +86,23 @@ final class MachineSettingsStore {
                 schemaVersion: Self.schemaVersion,
                 machineIdentifier: MachineIdentityProvider.current()?.identifier,
                 savedAt: Date(),
-                settings: settings
+                settings: settings,
+                signature: nil
             )
 
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             let data = try encoder.encode(envelope)
-            try data.write(to: settingsFileURL, options: .atomic)
+            let signature = computeSettingsSignature(data: data)
+            let signedEnvelope = PersistedAppSettingsEnvelope(
+                schemaVersion: Self.schemaVersion,
+                machineIdentifier: MachineIdentityProvider.current()?.identifier,
+                savedAt: Date(),
+                settings: settings,
+                signature: signature
+            )
+            let signedData = try encoder.encode(signedEnvelope)
+            try signedData.write(to: settingsFileURL, options: .atomic)
         } catch {
             NSLog("MacClipper failed to save local settings: \(error.localizedDescription)")
         }
@@ -150,5 +169,23 @@ final class MachineSettingsStore {
         }
 
         try? fileManager.removeItem(at: legacySettingsDirectoryURL)
+    }
+
+    private func hmacKey() -> Data {
+        let platformUUID = MachineIdentityProvider.current()?.identifier ?? "unknown"
+        return Data("\(platformUUID)\(Self.hmacSecretSalt)".utf8)
+    }
+
+    private func computeSettingsSignature(data: Data) -> String {
+        let key = SymmetricKey(data: hmacKey())
+        let code = HMAC<SHA256>.authenticationCode(for: data, using: key)
+        return Data(code).map { String(format: "%02x", $0) }.joined()
+    }
+
+    private func verifySettingsSignature(data: Data, signature: String) -> Bool {
+        let key = SymmetricKey(data: hmacKey())
+        let expectedCode = HMAC<SHA256>.authenticationCode(for: data, using: key)
+        let expectedString = Data(expectedCode).map { String(format: "%02x", $0) }.joined()
+        return signature == expectedString
     }
 }

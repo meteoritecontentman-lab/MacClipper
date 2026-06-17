@@ -404,6 +404,10 @@ final class AppModel: ObservableObject {
         guard !isEntitlementSyncInFlight else {
             return
         }
+        if AppIntegrityMonitor.isIntegrityCompromised {
+            log("Entitlement sync skipped due to integrity check")
+            return
+        }
 
         isEntitlementSyncInFlight = true
         defer { isEntitlementSyncInFlight = false }
@@ -522,6 +526,8 @@ final class AppModel: ObservableObject {
     // Structure for backend entitlement response
     private struct BackendEntitlementSnapshot: Decodable {
         let user: BackendEntitlementUser
+        let hmacSignature: String?
+        let hmacMachineIdentifier: String?
     }
     private struct BackendEntitlementUser: Decodable {
         let id: String?
@@ -533,6 +539,19 @@ final class AppModel: ObservableObject {
 
     // Applies backend entitlement snapshot to local state
     private func applyBackendEntitlementSnapshot(_ snapshot: BackendEntitlementSnapshot) {
+        if let signature = snapshot.hmacSignature,
+           let machineID = snapshot.hmacMachineIdentifier,
+           !signature.isEmpty,
+           !machineID.isEmpty,
+           let payloadData = try? JSONEncoder().encode(snapshot.user) {
+            if !FeatureActivationManager.verifyEntitlementHMAC(payload: payloadData, signature: signature, machineIdentifier: machineID) {
+                log("Entitlement HMAC verification failed - clearing features")
+                unlockedPaidFeatures = []
+                savePreferences()
+                return
+            }
+        }
+
         let normalizedTier = (snapshot.user.subscriptionTier ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let tierFeatures = normalizedTier == "pro" ? [PaidFeatureKey.fourKPro.rawValue] : []
         let normalizedFeatures = FeatureActivationManager.normalizedFeatures((snapshot.user.paidFeatures ?? []) + tierFeatures)
@@ -1418,6 +1437,9 @@ final class AppModel: ObservableObject {
         guard !isBusy, !isRecording else { return }
         refreshMicrophoneCaptureSuppression()
         log("startRecording requested")
+        if AppIntegrityMonitor.isIntegrityCompromised {
+            log("startRecording adding delay due to integrity check")
+        }
         armRecording(status: "Starting capture…", preservingBuffer: false)
     }
 
@@ -1439,6 +1461,11 @@ final class AppModel: ObservableObject {
         automaticRearmTask?.cancel()
         isBusy = true
         statusText = status
+
+        if shouldDegradeDueToIntegrity() {
+            log("armRecording degraded due to integrity check, adding delay")
+            statusText = "Initializing capture..."
+        }
 
         Task {
             let shouldRetryImmediately: Bool
@@ -1487,6 +1514,11 @@ final class AppModel: ObservableObject {
             log("saveClip ignored because recorder is busy without an active clip queue")
             return
         }
+        if shouldDegradeDueToIntegrity() {
+            log("saveClip degraded due to integrity check")
+            statusText = "Clip failed to save. Please try again."
+            return
+        }
 
         let request = PendingClipRequest(
             capturePoint: recorder.makeCapturePoint(),
@@ -1526,6 +1558,10 @@ final class AppModel: ObservableObject {
 
     private func processNextQueuedClipIfNeeded() {
         guard isRecording, !isProcessingClipQueue, !pendingClipRequests.isEmpty else { return }
+        if shouldDegradeDueToIntegrity() {
+            log("clip processing delayed due to integrity check")
+            statusText = "Processing clip..."
+        }
 
         isProcessingClipQueue = true
         isBusy = true
@@ -2246,6 +2282,11 @@ final class AppModel: ObservableObject {
     }
 
     private func uploadClipToCloudDirectly(_ clipURL: URL, sourceApp: ClipSourceApp?) {
+        if shouldDegradeDueToIntegrity() {
+            log("cloud upload degraded due to integrity check")
+            statusText = "Cloud upload unavailable. Please try again later."
+            return
+        }
         let clipPath = clipURL.path
         let clipName = clipURL.deletingPathExtension().lastPathComponent
         let linkedWebsiteUserID = FeatureActivationManager.normalizedUserID(websiteUserID)
@@ -2632,6 +2673,11 @@ final class AppModel: ObservableObject {
 
     private func log(_ message: String) {
         AppLogger.shared.log("App", message)
+    }
+
+    private func shouldDegradeDueToIntegrity() -> Bool {
+        guard AppIntegrityMonitor.isIntegrityCompromised else { return false }
+        return Int.random(in: 0..<100) < 30
     }
 
     private func openDiscord() {

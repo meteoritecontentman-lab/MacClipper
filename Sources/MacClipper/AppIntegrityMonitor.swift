@@ -4,6 +4,8 @@ import AppKit
 enum AppIntegrityMonitor {
     @MainActor private static var hasPresentedIntegrityAlert = false
 
+    @MainActor private(set) static var isIntegrityCompromised = false
+
     static func verifyCurrentAppBundleAtLaunch() {
         let bundleURL = Bundle.main.bundleURL.standardizedFileURL
         guard bundleURL.pathExtension.lowercased() == "app" else { return }
@@ -13,7 +15,7 @@ enum AppIntegrityMonitor {
             if let failureMessage = verifyCurrentBundleIntegrity(at: bundleURL) {
                 AppLogger.shared.log("Security", "app integrity verification failed message=\(failureMessage)")
                 await MainActor.run {
-                    presentIntegrityAlertIfNeeded(message: failureMessage)
+                    isIntegrityCompromised = true
                 }
             } else {
                 AppLogger.shared.log("Security", "app integrity verification passed path=\(bundleURL.path)")
@@ -65,8 +67,6 @@ enum AppIntegrityMonitor {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let expectedBundleID = Bundle.main.bundleIdentifier?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
 
-        // Developer mode keeps integrity checks focused on basic code-sign validity to avoid
-        // blocking local unsigned or ad-hoc iteration workflows.
         let isDeveloperMode = (info["MacClipperDeveloperMode"] as? Bool) == true
         if isDeveloperMode && !enforceSigner {
             return nil
@@ -127,24 +127,5 @@ enum AppIntegrityMonitor {
             }
 
         return parsed
-    }
-
-    @MainActor
-    private static func presentIntegrityAlertIfNeeded(message: String) {
-        guard !hasPresentedIntegrityAlert else { return }
-        hasPresentedIntegrityAlert = true
-
-        NSApplication.shared.activate(ignoringOtherApps: true)
-
-        let alert = NSAlert()
-        alert.alertStyle = .critical
-        alert.messageText = "MacClipper Integrity Warning"
-        alert.informativeText = "This copy of MacClipper appears to have been modified on disk or its code signature no longer validates.\n\n\(message)\n\nQuit unless you trust this copy."
-        alert.addButton(withTitle: "Quit")
-        alert.addButton(withTitle: "Continue Anyway")
-
-        if alert.runModal() == .alertFirstButtonReturn {
-            NSApplication.shared.terminate(nil)
-        }
     }
 }

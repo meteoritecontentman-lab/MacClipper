@@ -53,8 +53,6 @@
 	<string>https://macclipper.co/support</string>
 	<key>MacClipperAPIBaseURL</key>
 	<string>https://macclipper-ce502.web.app/api</string>
-	<key>MacClipperDeveloperMode</key>
-	<false/>
 	<key>MacClipperEnableUpdater</key>
 	<true/>
 	<key>NSMicrophoneUsageDescription</key>
