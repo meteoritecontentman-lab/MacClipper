@@ -23,9 +23,15 @@ struct PersistedAppSettings: Codable {
     var saveDirectoryPath: String
     var selectedCaptureDisplayID: String
     var discordWebhookURLString: String
+    var base44Token: String?
     var automaticallyChecksForUpdates: Bool
     var checksForUpdatesOnLaunch: Bool?
     var captureDeviceProfiles: [String: CaptureDeviceSettingsProfile]
+    var uploadedClipURLs: [String]
+    var hasCompletedOnboarding: Bool
+    var lastSeenLaunchSetupVersion: String?
+    var hasAcknowledgedFourKProUnlock: Bool?
+    var customVoiceCommandPhrase: String?
 }
 
 private struct PersistedAppSettingsEnvelope: Codable {
@@ -90,9 +96,21 @@ final class MachineSettingsStore {
     }
 
     private static func makeSettingsDirectoryURL(fileManager: FileManager) -> URL {
-        fileManager.homeDirectoryForCurrentUser
+        let appSupportDirectory = fileManager.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Application Support", isDirectory: true)
-            .appendingPathComponent("MacClipper", isDirectory: true)
+
+        let isDeveloperBuild = (Bundle.main.object(forInfoDictionaryKey: "MacClipperDeveloperMode") as? Bool) ?? false
+        let bundleIdentifier = (Bundle.main.bundleIdentifier ?? "local.macclipper.app").lowercased()
+
+        if isDeveloperBuild || bundleIdentifier != "local.macclipper.app" {
+            let displayName = ((Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String) ?? "MacClipper")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let folderName = displayName.isEmpty ? "MacClipper Dev" : displayName
+
+            return appSupportDirectory.appendingPathComponent(folderName, isDirectory: true)
+        }
+
+        return appSupportDirectory.appendingPathComponent("MacClipper", isDirectory: true)
     }
 
     private static func ensureDirectoryExists(at url: URL, fileManager: FileManager) throws {

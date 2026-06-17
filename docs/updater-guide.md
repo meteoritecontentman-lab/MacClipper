@@ -9,9 +9,9 @@ MacClipper now uses Sparkle for updates. New builds read a hosted Sparkle appcas
   - `https://raw.githubusercontent.com/Userbro20/macclip-auto-update/main/update-feed.json`
 
 ## How it works
-- Sparkle-enabled builds use `SUFeedURL` from `AppResources/Info.plist`, download a signed archive, verify the Ed25519 signature with `SUPublicEDKey`, and install through Sparkle’s standard updater flow.
-- Older custom-updater builds still read `update-feed.json`, verify the SHA-256 checksum, install the same zip archive, and land on the Sparkle-enabled build.
-- The shared release artifact is a `MacClipper.zip` created with `ditto` so bundle symlinks and signatures stay intact.
+- Production builds use `SUFeedURL` from `AppResources/Info.plist`, download a signed DMG, verify the Ed25519 signature with `SUPublicEDKey`, and install through Sparkle’s standard updater flow.
+- Developer builds now ship with the updater explicitly disabled so the dev app cannot try to update itself from the production feed.
+- Older custom-updater builds still read `update-feed.json`, verify the SHA-256 checksum, install the same hosted DMG archive, and land on the Sparkle-enabled build.
 
 ## Sparkle keys
 - A Sparkle signing keypair was generated locally with `./.build/artifacts/sparkle/Sparkle/bin/generate_keys`.
@@ -52,16 +52,22 @@ Or:
 cd /Users/meteorite/macclipper
 ./scripts/release_with_update.sh https://github.com/Userbro20/macclip-auto-update/releases/download/v1.2/MacClipper.zip
 ```
-
-6. Upload `dist/MacClipper.zip` to the exact URL referenced in the generated feed files.
+6. Upload `dist/MacClipper.dmg` to the exact URL referenced in the generated feed files.
 7. Push `appcast.xml` and `update-feed.json` so both new and old clients see the same release archive.
 
+Example DMG URL:
+
+```bash
+cd /Users/meteorite/macclipper
+./scripts/release_with_update.sh https://github.com/Userbro20/macclip-auto-update/releases/download/v1.2/MacClipper.dmg
+```
+
 ## What the release helper updates
-- `dist/MacClipper.zip`
+- `dist/MacClipper.dmg`
 - `appcast.xml`
 - `update-feed.json`
 
-The script signs the zip with Sparkle’s `sign_update`, writes a Sparkle `<enclosure>` entry with the EdDSA signature and length, and also refreshes the legacy SHA-256 manifest for older clients.
+The script signs the DMG with Sparkle’s `sign_update`, writes a Sparkle `<enclosure>` entry with the EdDSA signature and length, and also refreshes the legacy SHA-256 manifest for older clients.
 
 ## Notes
 - Keep using a public immutable HTTPS archive URL.

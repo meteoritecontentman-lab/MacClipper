@@ -3,6 +3,11 @@
   "private": true,
   "type": "commonjs",
   "scripts": {
+    "initialize": "./initialize",
+    "build:website": "npm --prefix website run build",
+    "build:functions": "npm --prefix functions run build",
+    "build:all": "npm run build:functions && npm run build:website && ./scripts/package_app.sh",
+    "deploy:firebase": "npm run build:functions && npm run build:website && firebase deploy --only hosting,functions,firestore",
     "web:init": "node backend/server.js --init-only",
     "web:bot-secret": "node backend/server.js --print-bot-secret",
     "web:dev": "node backend/server.js",

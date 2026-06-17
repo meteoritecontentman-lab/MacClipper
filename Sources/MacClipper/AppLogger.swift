@@ -5,18 +5,22 @@ final class AppLogger: @unchecked Sendable {
 
     let logDirectoryURL: URL
     let logFileURL: URL
-    private let legacyLogFileURL: URL
+    private let legacyCaptureLogFileURL: URL
+    private let legacyReplayLogFileURL: URL
 
     private let queue = DispatchQueue(label: "MacClipper.logger")
     private let formatter = ISO8601DateFormatter()
     private let fileManager = FileManager.default
 
     private init() {
+        let legacyLogDirectoryURL = Self.resolveLegacyLogDirectoryURL(fileManager: fileManager)
         logDirectoryURL = Self.resolveLogDirectoryURL(fileManager: fileManager)
-        logFileURL = logDirectoryURL.appendingPathComponent("capture.log", isDirectory: false)
-        legacyLogFileURL = logDirectoryURL.appendingPathComponent("replay-buffer.log", isDirectory: false)
+        logFileURL = logDirectoryURL.appendingPathComponent("main.log", isDirectory: false)
+        legacyCaptureLogFileURL = legacyLogDirectoryURL.appendingPathComponent("capture.log", isDirectory: false)
+        legacyReplayLogFileURL = legacyLogDirectoryURL.appendingPathComponent("replay-buffer.log", isDirectory: false)
         formatter.formatOptions = [.withInternetDateTime]
         ensureLogDirectoryExists()
+        log("Logger", "session started mainLog=\(logFileURL.path)")
     }
 
     func log(_ category: String, _ message: String) {
@@ -30,12 +34,19 @@ final class AppLogger: @unchecked Sendable {
         queue.sync {
             ensureLogDirectoryExists()
 
-            let currentData = try? Data(contentsOf: logFileURL)
-            let legacyData = try? Data(contentsOf: legacyLogFileURL)
-            let resolvedData = currentData?.isEmpty == false ? currentData : (legacyData?.isEmpty == false ? legacyData : nil)
+            let resolvedData = [logFileURL, legacyCaptureLogFileURL, legacyReplayLogFileURL]
+                .compactMap { $0 }
+                .compactMap { url -> Data? in
+                    guard let data = try? Data(contentsOf: url), !data.isEmpty else {
+                        return nil
+                    }
+
+                    return data
+                }
+                .first
 
             guard let data = resolvedData else {
-                return "No diagnostics logs yet. Try clipping again, then refresh this panel."
+                return "No diagnostics logs yet. Try clipping again, then refresh Main-Logs."
             }
 
             let logText = String(decoding: data, as: UTF8.self)
@@ -50,7 +61,8 @@ final class AppLogger: @unchecked Sendable {
     func clearLog() {
         queue.sync {
             try? fileManager.removeItem(at: logFileURL)
-            try? fileManager.removeItem(at: legacyLogFileURL)
+            try? fileManager.removeItem(at: legacyCaptureLogFileURL)
+            try? fileManager.removeItem(at: legacyReplayLogFileURL)
         }
     }
 
@@ -58,31 +70,38 @@ final class AppLogger: @unchecked Sendable {
         ensureLogDirectoryExists()
         let data = Data(line.utf8)
 
-        if fileManager.fileExists(atPath: logFileURL.path),
-           let handle = try? FileHandle(forWritingTo: logFileURL) {
+        append(data: data, to: logFileURL)
+    }
+
+    private func append(data: Data, to destinationURL: URL) {
+        ensureDirectoryExists(at: destinationURL.deletingLastPathComponent())
+
+        if fileManager.fileExists(atPath: destinationURL.path),
+           let handle = try? FileHandle(forWritingTo: destinationURL) {
             _ = try? handle.seekToEnd()
             try? handle.write(contentsOf: data)
             try? handle.close()
             return
         }
 
-        try? data.write(to: logFileURL, options: .atomic)
+        try? data.write(to: destinationURL, options: .atomic)
     }
 
     private func ensureLogDirectoryExists() {
-        guard !fileManager.fileExists(atPath: logDirectoryURL.path) else { return }
-        try? fileManager.createDirectory(at: logDirectoryURL, withIntermediateDirectories: true)
+        ensureDirectoryExists(at: logDirectoryURL)
+    }
+
+    private func ensureDirectoryExists(at url: URL) {
+        guard !fileManager.fileExists(atPath: url.path) else { return }
+        try? fileManager.createDirectory(at: url, withIntermediateDirectories: true)
     }
 
     private static func resolveLogDirectoryURL(fileManager: FileManager) -> URL {
-        let bundleURL = Bundle.main.bundleURL.standardizedFileURL
-        if bundleURL.pathExtension.lowercased() == "app" {
-            let bundledLogsURL = bundleURL.appendingPathComponent("Contents/Logs", isDirectory: true)
-            if fileManager.fileExists(atPath: bundledLogsURL.path) {
-                return bundledLogsURL
-            }
-        }
+        return fileManager.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Logs/MacClipper/Main-Logs", isDirectory: true)
+    }
 
+    private static func resolveLegacyLogDirectoryURL(fileManager: FileManager) -> URL {
         return fileManager.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Logs/MacClipper", isDirectory: true)
     }

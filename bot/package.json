@@ -1,0 +1,17 @@
+{
+  "name": "macclipper-discord-bot",
+  "version": "1.0.0",
+  "description": "MacClipper Discord bot — admin commands for managing users and entitlements",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "start": "python3 bot.py",
+    "start:js": "node index.js",
+    "register": "node register-commands.js"
+  },
+  "dependencies": {
+    "discord.js": "^14.15.3",
+    "dotenv": "^16.4.5",
+    "node-fetch": "^3.3.2"
+  }
+}

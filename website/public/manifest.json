@@ -1,0 +1,15 @@
+{
+  "short_name": "MacClipper",
+  "name": "MacClipper - Instant Replay for macOS",
+  "icons": [
+    {
+      "src": "https://media.base44.com/images/public/user_69840c94143af1fbc044bd6f/cf2d115fa_AppIcon_1024x1024x32.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ],
+  "start_url": "/",
+  "display": "standalone",
+  "theme_color": "#11171d",
+  "background_color": "#071018"
+}

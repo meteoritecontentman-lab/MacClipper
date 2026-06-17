@@ -1,51 +1,13 @@
 import SwiftUI
-import AppKit
-
-@MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
-    nonisolated static let deepLinkNotification = Notification.Name("MacClipperDeepLinkNotification")
-    nonisolated static let deepLinkUserInfoKey = "urls"
-
-    private let discordRichPresenceManager = DiscordRichPresenceManager()
-    private static var pendingIncomingURLs: [URL] = []
-
-    func applicationDidFinishLaunching(_ notification: Notification) {
-        NSApp.setActivationPolicy(.accessory)
-        AppIntegrityMonitor.verifyCurrentAppBundleAtLaunch()
-        discordRichPresenceManager.start()
-    }
-
-    func applicationWillTerminate(_ notification: Notification) {
-        discordRichPresenceManager.stop()
-    }
-
-    func application(_ application: NSApplication, open urls: [URL]) {
-        Self.pendingIncomingURLs.append(contentsOf: urls)
-        NotificationCenter.default.post(
-            name: Self.deepLinkNotification,
-            object: nil,
-            userInfo: [Self.deepLinkUserInfoKey: urls]
-        )
-    }
-
-    static func takePendingIncomingURLs() -> [URL] {
-        let urls = pendingIncomingURLs
-        pendingIncomingURLs.removeAll()
-        return urls
-    }
-}
 
 @main
 struct MacClipperApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
-    @StateObject private var model = AppModel()
 
     var body: some Scene {
-        MenuBarExtra("MacClipper", systemImage: model.isRecording ? "bolt.circle.fill" : "bolt.circle") {
-            MenuContentView()
-                .environmentObject(model)
+        Settings {
+            EmptyView()
         }
-        .menuBarExtraStyle(.window)
     }
 }
 
@@ -56,10 +18,21 @@ struct MenuContentView: View {
 
     @State private var activePage: MenuPage = .dashboard
 
+    private var appDisplayName: String {
+        ((Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String) ?? "MacClipper")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var appVersionLabel: String {
+        let version = ((Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String) ?? "0")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return "\(appDisplayName) v\(version)"
+    }
+
     enum MenuPage {
         case dashboard
         case library
-        case editor
+        case community
         case settings
     }
 
@@ -96,65 +69,68 @@ struct MenuContentView: View {
         ZStack {
             MacClipperBackdrop(style: .menuGray)
 
-            VStack(spacing: 0) {
-                // Tab bar
-                HStack(spacing: 0) {
-                    MenuTabButton(icon: "bolt", title: "Dashboard", isSelected: activePage == .dashboard) {
-                        withAnimation(.easeInOut(duration: 0.16)) {
-                            activePage = .dashboard
-                        }
-                    }
-                    MenuTabButton(icon: "rectangle.stack", title: "Library", isSelected: activePage == .library) {
-                        withAnimation(.easeInOut(duration: 0.16)) {
-                            activePage = .library
-                        }
-                    }
-                    MenuTabButton(icon: "scissors", title: "Editor", isSelected: activePage == .editor) {
-                        withAnimation(.easeInOut(duration: 0.16)) {
-                            activePage = .editor
-                        }
-                    }
-                    MenuTabButton(icon: "gearshape", title: "Settings", isSelected: activePage == .settings) {
-                        withAnimation(.easeInOut(duration: 0.16)) {
-                            activePage = .settings
-                        }
-                    }
-                }
-                .padding(.horizontal, 12)
-                .padding(.top, 8)
-                .padding(.bottom, 4)
-
-                SlatePanel(cornerRadius: 26, padding: 14) {
-                    Group {
-                        switch activePage {
-                        case .dashboard:
-                            dashboardPage
-                        case .library:
-                            MenuClipLibraryPage {
-                                withAnimation(.easeInOut(duration: 0.16)) {
-                                    activePage = .dashboard
-                                }
-                            }
-                            .environmentObject(model)
-                        case .editor:
-                            MenuClipEditorPage {
-                                withAnimation(.easeInOut(duration: 0.16)) {
-                                    activePage = .dashboard
-                                }
-                            }
-                            .environmentObject(model)
-                        case .settings:
-                            MenuSettingsPage {
-                                withAnimation(.easeInOut(duration: 0.16)) {
-                                    activePage = .dashboard
-                                }
-                            }
-                            .environmentObject(model)
-                        }
-                    }
+            if model.shouldShowLaunchSetup {
+                OnboardingView()
+                    .environmentObject(model)
                     .frame(width: 560)
+                    .padding(12)
+            } else {
+                VStack(spacing: 0) {
+                    // Tab bar
+                    HStack(spacing: 0) {
+                        MenuTabButton(icon: "bolt", title: "Dashboard", isSelected: activePage == .dashboard) {
+                            withAnimation(.easeInOut(duration: 0.16)) {
+                                activePage = .dashboard
+                            }
+                        }
+                        MenuTabButton(icon: "rectangle.stack", title: "Library", isSelected: activePage == .library) {
+                            withAnimation(.easeInOut(duration: 0.16)) {
+                                activePage = .library
+                            }
+                        }
+                        MenuTabButton(icon: "globe", title: "Community", isSelected: activePage == .community) {
+                            withAnimation(.easeInOut(duration: 0.16)) {
+                                activePage = .community
+                            }
+                        }
+                        MenuTabButton(icon: "gearshape", title: "Settings", isSelected: activePage == .settings) {
+                            withAnimation(.easeInOut(duration: 0.16)) {
+                                activePage = .settings
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.top, 8)
+                    .padding(.bottom, 4)
+
+                    SlatePanel(cornerRadius: 26, padding: 14) {
+                        Group {
+                            switch activePage {
+                            case .dashboard:
+                                dashboardPage
+                            case .library:
+                                MenuClipLibraryPage {
+                                    withAnimation(.easeInOut(duration: 0.16)) {
+                                        activePage = .dashboard
+                                    }
+                                }
+                                .environmentObject(model)
+                            case .community:
+                                CommunityClipsView()
+                                    .environmentObject(model)
+                            case .settings:
+                                MenuSettingsPage {
+                                    withAnimation(.easeInOut(duration: 0.16)) {
+                                        activePage = .dashboard
+                                    }
+                                }
+                                .environmentObject(model)
+                            }
+                        }
+                        .frame(width: 560)
+                    }
+                    .padding(12)
                 }
-                .padding(12)
             }
         }
         .onAppear {
@@ -241,67 +217,17 @@ struct MenuContentView: View {
                 }
             }
 
-            // Cloud Connection Row
-            if !model.isCloudConnected {
-                SlateRow(
-                    title: "Connect to Cloud",
-                    subtitle: "Link your MacClipper account to sync clips automatically",
-                    systemImage: "cloud",
-                    isSelected: false,
-                    tint: SlateTheme.accent,
-                    density: menuDensity
-                ) {
-                    Button {
-                        model.openCloudConnectURL()
-                    } label: {
-                        SlateCapsuleButtonLabel(title: "Connect", systemImage: "link", density: menuDensity)
-                    }
-                    .buttonStyle(.plain)
-                }
-            } else {
-                SlateRow(
-                    title: "Cloud Connected",
-                    subtitle: "Your clips are automatically synced to the cloud",
-                    systemImage: "cloud.fill",
-                    isSelected: true,
-                    tint: SlateTheme.success,
-                    density: menuDensity
-                ) {
-                    Button {
-                        model.openCloudDashboard()
-                    } label: {
-                        SlateCapsuleButtonLabel(title: "My Clips", systemImage: "rectangle.stack.fill", density: menuDensity)
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-
             SlatePanelDivider()
-            // --- PRO Section ---
-            SlateSectionCaption(title: "PRO", density: menuDensity)
+            SlateSectionCaption(title: "Editor", density: menuDensity)
             SlateRow(
-                title: "Clip Editor",
-                subtitle: model.hasUnlocked4KPro ? "Edit your clips with advanced tools" : "Unlock PRO to use the Clip Editor",
-                systemImage: "pencil.and.outline",
+                title: "MacClipper Editor",
+                subtitle: "Open the dedicated MacClipper Editor window.",
+                systemImage: "scissors",
                 isSelected: model.hasUnlocked4KPro,
-                tint: model.hasUnlocked4KPro ? SlateTheme.success : SlateTheme.warning,
+                tint: model.hasUnlocked4KPro ? SlateTheme.accent : SlateTheme.warning,
                 density: menuDensity
             ) {
-                Button {
-                    if model.hasUnlocked4KPro, let firstClip = model.clips.first {
-                        model.openClipEditor(for: firstClip)
-                    }
-                } label: {
-                    SlateCapsuleButtonLabel(
-                        title: model.hasUnlocked4KPro ? "Open Editor" : "PRO Only",
-                        systemImage: "star.fill",
-                        tint: SlateTheme.textPrimary,
-                        highlighted: model.hasUnlocked4KPro,
-                        density: menuDensity
-                    )
-                }
-                .buttonStyle(.plain)
-                .disabled(!model.hasUnlocked4KPro || model.clips.isEmpty)
+                SlateStatusBadge(title: model.hasUnlocked4KPro ? "Ready" : "PRO", tint: model.hasUnlocked4KPro ? SlateTheme.accent : SlateTheme.warning)
             }
 
             SlatePanelDivider()
@@ -364,7 +290,7 @@ struct MenuContentView: View {
             }
 
             HStack(spacing: 8) {
-                Text("MacClipper v1.2.4")
+                Text(appVersionLabel)
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(SlateTheme.textTertiary)
                     .lineLimit(1)
@@ -374,7 +300,7 @@ struct MenuContentView: View {
                 Button {
                     NSApplication.shared.terminate(nil)
                 } label: {
-                    SlateCapsuleButtonLabel(title: "Quit MacClipper", density: menuDensity)
+                    SlateCapsuleButtonLabel(title: "Quit \(appDisplayName)", density: menuDensity)
                 }
                 .buttonStyle(.plain)
             }

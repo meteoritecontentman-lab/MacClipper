@@ -32,14 +32,38 @@ final class VoiceCommandManager: NSObject, AVCaptureAudioDataOutputSampleBufferD
     private let sessionQueue = DispatchQueue(label: "MacClipper.voice-command.session")
     private let captureSession = AVCaptureSession()
     private let audioOutput = AVCaptureAudioDataOutput()
-    private let triggerCommands = [
+    private var triggerCommands = [
         "Mac clip that",
         "MacClip that"
     ]
-    private let normalizedTriggerCommands = [
+    private var normalizedTriggerCommands = [
         "mac clip that",
         "macclip that"
     ]
+
+    func setCustomTriggerCommand(_ phrase: String) {
+        let trimmed = phrase.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            resetTriggerCommands()
+            return
+        }
+        let normalized = trimmed.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current).lowercased()
+        sessionQueue.async {
+            self.triggerCommands = [trimmed]
+            self.normalizedTriggerCommands = [normalized]
+            guard self.requestedStart else { return }
+            self.restartListeningLocked(reason: "custom trigger command updated")
+        }
+    }
+
+    private func resetTriggerCommands() {
+        sessionQueue.async {
+            self.triggerCommands = ["Mac clip that", "MacClip that"]
+            self.normalizedTriggerCommands = ["mac clip that", "macclip that"]
+            guard self.requestedStart else { return }
+            self.restartListeningLocked(reason: "trigger commands reset to default")
+        }
+    }
     private let minimumRecognitionInterval: TimeInterval = 2
     private let recognitionRestartDelay: TimeInterval = 0.35
 
@@ -398,7 +422,7 @@ final class VoiceCommandManager: NSObject, AVCaptureAudioDataOutputSampleBufferD
     }
 
     private func preferredMicrophoneLocked() -> AVCaptureDevice? {
-        let devices = AVCaptureDevice.DiscoverySession(deviceTypes: [.microphone], mediaType: .audio, position: .unspecified).devices
+        let devices = AudioCaptureDeviceCatalog.devices()
 
         if let preferredMicrophoneDeviceID,
            let preferredDevice = devices.first(where: { $0.uniqueID == preferredMicrophoneDeviceID }) {
@@ -412,7 +436,7 @@ final class VoiceCommandManager: NSObject, AVCaptureAudioDataOutputSampleBufferD
             )
         }
 
-        return AVCaptureDevice.default(for: .audio) ?? devices.first
+        return AudioCaptureDeviceCatalog.preferredDevice(preferredUniqueID: nil)
     }
 
     private func activeMicrophoneDescriptionLocked() -> String {
@@ -421,7 +445,7 @@ final class VoiceCommandManager: NSObject, AVCaptureAudioDataOutputSampleBufferD
             return currentInput?.device.localizedName ?? "System Default"
         case .externalMicrophoneFeed:
             if let preferredMicrophoneDeviceID,
-               let preferredDevice = AVCaptureDevice.DiscoverySession(deviceTypes: [.microphone], mediaType: .audio, position: .unspecified).devices.first(where: { $0.uniqueID == preferredMicrophoneDeviceID }) {
+               let preferredDevice = AudioCaptureDeviceCatalog.device(withUniqueID: preferredMicrophoneDeviceID) {
                 return preferredDevice.localizedName
             }
             return "Recorder Microphone Feed"

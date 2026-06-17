@@ -6,33 +6,68 @@ struct MenuSettingsPage: View {
     let onBack: () -> Void
 
     @State private var diagnosticsExpanded = false
+    @State private var audioSourceSelection: AudioSourceSelection = .microphoneOnly
+    @State private var showVirtualDeviceSetup = false
 
     private let density: SlateDensity = .compact
 
+    private var audioSourceWarning: String? {
+        switch audioSourceSelection {
+        case .both:
+            return "MacClipper mixes mic and desktop audio in-app (no system virtual device needed)."
+        case .systemAudioOnly:
+            return "Desktop audio will be captured via ScreenCaptureKit."
+        default:
+            break
+        }
+        return nil
+    }
+
     private var notificationsBinding: Binding<Bool> {
-        binding(for: \.enableGameNotifications)
+        Binding(
+            get: { model.enableGameNotifications },
+            set: { newValue in
+                model.enableGameNotifications = newValue
+                model.savePreferences()
+            }
+        )
     }
 
     private var microphoneBinding: Binding<Bool> {
-        binding(for: \.includeMicrophone)
+        Binding(
+            get: { model.includeMicrophone },
+            set: { newValue in
+                model.includeMicrophone = newValue
+                model.savePreferences()
+            }
+        )
     }
 
     private var microphoneDeviceBinding: Binding<String> {
         Binding(
             get: { model.selectedMicrophoneID },
-            set: { model.setSelectedMicrophoneID($0) }
+            set: { newValue in
+                model.setSelectedMicrophoneID(newValue)
+                model.savePreferences()
+            }
         )
     }
 
     private var systemAudioBinding: Binding<Bool> {
-        binding(for: \.captureSystemAudio)
+        Binding(
+            get: { model.captureSystemAudio },
+            set: { newValue in
+                model.captureSystemAudio = newValue
+                model.savePreferences()
+            }
+        )
     }
 
     private var systemAudioLevelBinding: Binding<Double> {
         Binding(
             get: { model.systemAudioLevel * 100 },
-            set: {
-                model.systemAudioLevel = $0 / 100
+            set: { newValue in
+                model.systemAudioLevel = newValue / 100
                 model.savePreferences()
             }
         )
@@ -41,15 +76,21 @@ struct MenuSettingsPage: View {
     private var microphoneAudioLevelBinding: Binding<Double> {
         Binding(
             get: { model.microphoneAudioLevel * 100 },
-            set: {
-                model.microphoneAudioLevel = $0 / 100
+            set: { newValue in
+                model.microphoneAudioLevel = newValue / 100
                 model.savePreferences()
             }
         )
     }
 
     private var showCursorBinding: Binding<Bool> {
-        binding(for: \.showCursor)
+        Binding(
+            get: { model.showCursor },
+            set: { newValue in
+                model.showCursor = newValue
+                model.savePreferences()
+            }
+        )
     }
 
     private var useCommandBinding: Binding<Bool> {
@@ -135,6 +176,55 @@ struct MenuSettingsPage: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 6) {
+                    // Audio Source Selection
+                    SlateSectionCaption(title: "Audio Source", density: density)
+                    SlateRow(
+                        title: "Audio Source",
+                        subtitle: audioSourceSelection.rawValue,
+                        systemImage: "waveform.circle",
+                        isSelected: true,
+                        tint: SlateTheme.accent,
+                        density: density
+                    ) {
+                        Picker("Audio Source", selection: $audioSourceSelection) {
+                            ForEach(AudioSourceSelection.allCases) { option in
+                                Text(option.rawValue).tag(option)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                        .frame(width: 220)
+                        .onChange(of: audioSourceSelection) { newValue in
+                            if newValue == .both || newValue == .systemAudioOnly {
+                                showVirtualDeviceSetup = true
+                            }
+                        }
+                    }
+                    if let warning = audioSourceWarning {
+                        Text(warning)
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                            .padding(.vertical, 2)
+                    }
+                    Button("Audio Engine") {
+                        showVirtualDeviceSetup = true
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.accentColor)
+                    if showVirtualDeviceSetup {
+                        VirtualAudioDeviceSetupWizard(isPresented: $showVirtualDeviceSetup)
+                    }
+                    SlatePanelDivider()
+                    SlateSectionCaption(title: "Editor", density: density)
+                    SlateRow(
+                        title: "MacClipper Editor",
+                        subtitle: "MacClipper Editor opens in a dedicated MacClipper window.",
+                        systemImage: "scissors",
+                        isSelected: model.hasUnlocked4KPro,
+                        tint: model.hasUnlocked4KPro ? SlateTheme.accent : SlateTheme.warning,
+                        density: density
+                    ) {
+                        SlateStatusBadge(title: model.hasUnlocked4KPro ? "Ready" : "PRO", tint: model.hasUnlocked4KPro ? SlateTheme.accent : SlateTheme.warning)
+                    }
                     SlateSectionCaption(title: "Capture", density: density)
 
                     SlateRow(
@@ -232,31 +322,10 @@ struct MenuSettingsPage: View {
                         .buttonStyle(.plain)
                     }
 
-                    SlateRow(
-                        title: "Website User ID",
-                        subtitle: model.websiteUserIDDisplayText,
-                        systemImage: "person.text.rectangle",
-                        isSelected: !model.websiteUserID.isEmpty,
-                        tint: model.websiteUserID.isEmpty ? SlateTheme.warning : SlateTheme.success,
-                        density: density
-                    ) {
-                        Button {
-                            model.copyWebsiteUserID()
-                        } label: {
-                            SlateCapsuleButtonLabel(
-                                title: model.websiteUserID.isEmpty ? "Waiting" : "Copy ID",
-                                systemImage: model.websiteUserID.isEmpty ? "hourglass" : "doc.on.doc",
-                                tint: SlateTheme.textPrimary,
-                                highlighted: !model.websiteUserID.isEmpty,
-                                density: density
-                            )
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(model.websiteUserID.isEmpty)
-                    }
+                        // Website User ID row removed
 
                     SlateRow(
-                        title: "4K Pro",
+                        title: "MacClipper Pro",
                         subtitle: model.hasUnlocked4KPro ? "Purchased" : "Buy once on the website",
                         systemImage: model.hasUnlocked4KPro ? "checkmark.seal.fill" : "lock.fill",
                         isSelected: model.hasUnlocked4KPro,
@@ -267,7 +336,7 @@ struct MenuSettingsPage: View {
                             model.open4KPurchasePage()
                         } label: {
                             SlateCapsuleButtonLabel(
-                                title: model.hasUnlocked4KPro ? "Open Portal" : "Buy 4K",
+                                title: model.hasUnlocked4KPro ? "Open Portal" : "Buy Pro",
                                 systemImage: model.hasUnlocked4KPro ? "arrow.up.forward.app" : "cart.fill",
                                 tint: SlateTheme.textPrimary,
                                 highlighted: true,
@@ -275,6 +344,10 @@ struct MenuSettingsPage: View {
                             )
                         }
                         .buttonStyle(.plain)
+                    }
+
+                    if model.isDeveloperBuild {
+                        DeveloperSettingsPanel(density: density)
                     }
 
                     SlateRow(
@@ -382,6 +455,11 @@ struct MenuSettingsPage: View {
                         .frame(width: 210)
                     }
 
+                    SlateSectionCaption(title: "Voice Commands", density: density)
+
+                    VoiceCommandSetupCard(density: density)
+                        .environmentObject(model)
+
                     SlateRow(
                         title: "Cursor",
                         subtitle: model.showCursor ? "Visible in clips" : "Hidden from clips",
@@ -408,8 +486,8 @@ struct MenuSettingsPage: View {
                     SlateSectionCaption(title: "Share + Storage", density: density)
 
                     SlateRow(
-                        title: "Discord Channel",
-                        subtitle: model.hasDiscordWebhookConfigured ? "Webhook locked for this build" : "No webhook configured",
+                        title: "Public Posting",
+                        subtitle: model.hasDiscordWebhookConfigured ? "Locked online feed ready for this build" : "Locked online feed missing",
                         systemImage: "paperplane.fill",
                         isSelected: model.hasDiscordWebhookConfigured,
                         tint: SlateTheme.accent,
@@ -418,7 +496,7 @@ struct MenuSettingsPage: View {
                         Button {
                             model.testDiscordWebhook()
                         } label: {
-                            SlateCapsuleButtonLabel(title: "Test Channel", systemImage: "arrow.triangle.2.circlepath", density: density)
+                            SlateCapsuleButtonLabel(title: "Test Posting", systemImage: "arrow.triangle.2.circlepath", density: density)
                         }
                         .buttonStyle(.plain)
                     }
@@ -452,6 +530,22 @@ struct MenuSettingsPage: View {
                     SlateSectionCaption(title: "Updates + Diagnostics", density: density)
 
                     SlateRow(
+                        title: "Clear Cache",
+                        subtitle: "Remove temp buffer files and reset upload tracking",
+                        systemImage: "trash.fill",
+                        isSelected: false,
+                        tint: SlateTheme.warning,
+                        density: density
+                    ) {
+                        Button {
+                            model.clearAppCache()
+                        } label: {
+                            SlateCapsuleButtonLabel(title: "Clear Cache", systemImage: "trash", tint: SlateTheme.textPrimary, highlighted: true, density: density)
+                        }
+                        .buttonStyle(.plain)
+                    }
+
+                    SlateRow(
                         title: "Updater",
                         subtitle: model.updater.statusText,
                         systemImage: "arrow.triangle.2.circlepath",
@@ -472,24 +566,24 @@ struct MenuSettingsPage: View {
 
                     SlateRow(
                         title: "Automatic Update Checks",
-                        subtitle: model.updater.automaticallyChecksForUpdates ? "Background checks on" : "Manual checks only",
+                        subtitle: "Always enabled so MacClipper keeps polling for updates in the background.",
                         systemImage: "clock.badge.checkmark",
-                        isSelected: model.updater.automaticallyChecksForUpdates,
+                        isSelected: true,
                         tint: SlateTheme.success,
                         density: density
                     ) {
-                        SlateToggleButton(isOn: automaticUpdatesBinding, onTitle: "Auto", offTitle: "Manual")
+                        SlateStatusBadge(title: "Always On", tint: SlateTheme.success)
                     }
 
                     SlateRow(
                         title: "Update On App Open",
-                        subtitle: model.updater.checksForUpdatesOnLaunch ? "Checks on every launch" : "No launch-time check",
+                        subtitle: "Every app launch checks for updates and brings the prompt to the front.",
                         systemImage: "arrow.up.circle.fill",
-                        isSelected: model.updater.checksForUpdatesOnLaunch,
+                        isSelected: true,
                         tint: SlateTheme.success,
                         density: density
                     ) {
-                        SlateToggleButton(isOn: launchUpdateChecksBinding, onTitle: "On", offTitle: "Off")
+                        SlateStatusBadge(title: "Required", tint: SlateTheme.success)
                     }
 
                     SlateInsetPanel {
@@ -593,6 +687,167 @@ struct MenuSettingsPage: View {
                 model.savePreferences()
             }
         )
+    }
+}
+
+private struct VirtualAudioDeviceSetupWizard: View {
+    @Binding var isPresented: Bool
+    @State private var setupStatus = ""
+    @State private var isSettingUp = false
+    @State private var engine: AudioEngineManager?
+    @State private var micVolume: Float = 1.0
+    @State private var systemVolume: Float = 1.0
+    @State private var micEnabled = true
+    @State private var systemEnabled = true
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Audio Engine")
+                .font(.headline)
+            Text("MacClipper mixes your microphone and desktop audio in-app. No system virtual device or Audio MIDI Setup needed.")
+                .font(.subheadline)
+
+            if let engine {
+                VStack(spacing: 10) {
+                    GroupBox(label: Label("Microphone", systemImage: "mic.fill")) {
+                        VStack(spacing: 6) {
+                            Toggle("Enabled", isOn: $micEnabled)
+                                .onChange(of: micEnabled) { _ in
+                                    engine.toggleSource(.microphone)
+                                }
+                            SlateVolumeSlider(value: $micVolume, label: "Volume")
+                                .onChange(of: micVolume) { v in
+                                    engine.micVolume = v
+                                }
+                        }
+                        .padding(.vertical, 4)
+                    }
+
+                    GroupBox(label: Label("Desktop Audio", systemImage: "speaker.wave.2.fill")) {
+                        VStack(spacing: 6) {
+                            Toggle("Enabled", isOn: $systemEnabled)
+                                .onChange(of: systemEnabled) { _ in
+                                    engine.toggleSource(.systemAudio)
+                                }
+                            SlateVolumeSlider(value: $systemVolume, label: "Volume")
+                                .onChange(of: systemVolume) { v in
+                                    engine.systemVolume = v
+                                }
+                        }
+                        .padding(.vertical, 4)
+                    }
+                }
+                .font(.system(size: 12))
+
+                VStack(spacing: 4) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundStyle(.green)
+                        Text("Audio engine is running")
+                            .font(.system(size: 11, weight: .medium))
+                    }
+
+                    HStack(spacing: 4) {
+                        let hp = AudioEngineManager.isHeadphonesOutput()
+                        Image(systemName: hp ? "headphones" : "speaker.fill")
+                            .foregroundStyle(.secondary)
+                        Text(hp ? "Headphones detected — monitoring safe" : "Speakers active — sources start muted to prevent feedback")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.bottom, 2)
+                }
+                .padding(8)
+                .background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 8))
+            } else if isSettingUp {
+                HStack(spacing: 6) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text(setupStatus)
+                        .font(.system(size: 11, weight: .medium))
+                }
+                .padding(8)
+                .background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 8))
+            } else if !setupStatus.isEmpty {
+                HStack(spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                    Text(setupStatus)
+                        .font(.system(size: 11, weight: .medium))
+                }
+                .padding(8)
+                .background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 8))
+            }
+
+            VStack(spacing: 8) {
+                if engine == nil {
+                    Button {
+                        startEngine()
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "waveform")
+                                .font(.system(size: 11))
+                            Text("Start Audio Engine")
+                        }
+                        .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(isSettingUp)
+                }
+
+                Button("Done") { isPresented = false }
+                    .buttonStyle(.bordered)
+                    .frame(maxWidth: .infinity)
+            }
+        }
+        .padding()
+        .frame(width: 400)
+        .background(RoundedRectangle(cornerRadius: 12).fill(Color(NSColor.windowBackgroundColor)))
+        .shadow(radius: 8)
+        .padding()
+    }
+
+    private func startEngine() {
+        isSettingUp = true
+        setupStatus = "Starting audio engine..."
+
+        DispatchQueue.main.async {
+            AudioVirtualDeviceManager.createVirtualDevice()
+        }
+
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            if let engine = AudioVirtualDeviceManager.engineManager() {
+                self.engine = engine
+                micVolume = engine.micVolume
+                systemVolume = engine.systemVolume
+                isSettingUp = false
+                setupStatus = ""
+            } else {
+                isSettingUp = false
+                setupStatus = "Audio engine could not start."
+            }
+        }
+    }
+}
+
+private struct SlateVolumeSlider: View {
+    @Binding var value: Float
+    let label: String
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text(label)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.secondary)
+                .frame(width: 50, alignment: .leading)
+            Slider(value: $value, in: 0...1)
+                .controlSize(.small)
+            Text("\(Int(value * 100))%")
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(.secondary)
+                .frame(width: 36, alignment: .trailing)
+        }
     }
 }
 

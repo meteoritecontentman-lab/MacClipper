@@ -6,14 +6,15 @@
                 <description>Sparkle appcast for MacClipper releases.</description>
                 <language>en</language>
                 <item>
-                        <title>Version 1.2.6</title>
+                        <title>Version 1.2.7</title>
                         <link>https://github.com/Userbro20/macclip-auto-update/releases</link>
-                        <sparkle:version>8</sparkle:version>
-                        <sparkle:shortVersionString>1.2.6</sparkle:shortVersionString>
+                        <sparkle:version>9</sparkle:version>
+                        <sparkle:shortVersionString>1.2.7</sparkle:shortVersionString>
                         <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-                        <pubDate>Sat, 25 Apr 2026 15:10:57 +0000</pubDate>
+                        <pubDate>Fri, 01 May 2026 02:57:13 +0000</pubDate>
                         <description><![CDATA[<p>Voice command setup is now built into onboarding and settings, microphone testing is available in-app, clip start and save sounds were refreshed, and MacClipper notifications now use the app icon.</p>]]></description>
-                        <enclosure url="https://github.com/Userbro20/macclip-auto-update/releases/download/v1.2.6/MacClipper.dmg" sparkle:edSignature="PMa+fA0vI6P7O2FCz7Zle4g451epbO+HlQGfC5jJp/Js23UJlBKcrbT7cqcKIyK6cOX9VpUBSuj2+PBEVIqsAA==" length="3107503" type="application/octet-stream" />
+                        <enclosure url="https://github.com/Userbro20/macclip-auto-update/releases/download/v1.2.7/MacClipper.dmg" sparkle:edSignature="+qyGs70kSOvqKLl64+OzLq32SCmkro/dRli+aFWVJZodd9hxeVTaDHoUJ7OGDbxnmDLLSutYlh4u/zUtJ1Y0Bw==" length="3189542" type="application/octet-stream" />
+                        <enclosure url="https://github.com/Userbro20/macclip-auto-update/releases/download/v1.2.7/MacClipper.dmg" sparkle:edSignature="+qyGs70kSOvqKLl64+OzLq32SCmkro/dRli+aFWVJZodd9hxeVTaDHoUJ7OGDbxnmDLLSutYlh4u/zUtJ1Y0Bw==" length="3189542" type="application/x-apple-diskimage" />
                 </item>
         </channel>
 </rss>

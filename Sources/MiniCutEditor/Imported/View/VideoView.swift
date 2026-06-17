@@ -1,0 +1,141 @@
+import Foundation
+import AVFoundation
+import SpriteKit
+
+private let cursorActionKey = "cursorAction"
+private let cursorStride: TimeInterval = 0.1
+
+/// A view of the composited video.
+@MainActor
+final class VideoView: SKSpriteNode, SKInputHandler {
+    private let state: MiniCutState
+    
+    private var isPlayingSubscription: Subscription?
+    private var timelineSubscription: Subscription?
+    private var cursorSubscription: Subscription?
+    private var updateStartSubscription: Subscription?
+    
+    private var crop: SKCropNode!
+    private var videoClipNodes: [UUID: VideoClipView] = [:]
+    
+    private var startDate: Date?
+    private var startCursor: TimeInterval?
+    
+    private var dragState: DragState = .inactive
+    
+    private enum DragState {
+        case resizing(VideoClipView)
+        case clip(ClipDragState)
+        case inactive
+    }
+    
+    private struct ClipDragState {
+        let trackId: UUID
+        let clipId: UUID
+        let startPoint: CGPoint
+        let startOffsetDx: Double
+        let startOffsetDy: Double
+    }
+    
+    init(state: MiniCutState, size: CGSize) {
+        self.state = state
+        
+        super.init(texture: nil, color: .black, size: size)
+        
+        // We don't enable user interaction here, instead we forward
+        // events from MiniCutScene. This is due to the crop node making
+        // nodes that aren't visible interactable.
+        
+        crop = SKCropNode()
+        crop.maskNode = SKSpriteNode(color: .white, size: size)
+        addChild(crop)
+        
+        updateStartSubscription = state.cursorDidChange.subscribeFiring(state.cursor) { [unowned self] in
+            startDate = Date()
+            startCursor = $0
+        }
+        
+        let updateClips = { [unowned self] in
+            let playing = state.timeline.playingClips(at: state.cursor)
+            crop.diffUpdate(nodes: &videoClipNodes, with: playing) {
+                VideoClipView(state: state, trackId: $0.trackId, id: $0.clip.id, size: size, zIndex: $0.zIndex)
+            }
+        }
+        
+        cursorSubscription = state.cursorDidChange.subscribeFiring(state.cursor) { _ in updateClips() }
+        timelineSubscription = state.timelineDidChange.subscribeFiring(state.timeline) { _ in updateClips() }
+        
+        isPlayingSubscription = state.isPlayingDidChange.subscribeFiring(state.isPlaying) { [unowned self] in
+            if $0 {
+                startDate = Date()
+                startCursor = state.cursor
+                
+                run(.repeatForever(.sequence([
+                    .run {
+                        let videoCursorSubscriptions = self.videoClipNodes.values.compactMap(\.cursorSubscription)
+                        state.cursorDidChange.silencing([self.updateStartSubscription].compactMap { $0 } + videoCursorSubscriptions) {
+                            state.cursor = self.startCursor! - self.startDate!.timeIntervalSinceNow
+                        }
+                    },
+                    .wait(forDuration: cursorStride)
+                ])), withKey: cursorActionKey)
+            } else {
+                removeAction(forKey: cursorActionKey)
+            }
+        }
+    }
+    
+    required init?(coder aDecoder: NSCoder) {
+        nil
+    }
+    
+    func inputDown(at point: CGPoint) {
+        if let node = videoClipNodes.values.filter({ $0.contains(point) }).max(by: { $0.zIndex < $1.zIndex }), let nodeParent = node.parent {
+            state.selection = Selection(trackId: node.trackId, clipId: node.id)
+            node.tryBeginResizing(at: convert(point, to: nodeParent))
+            if node.isResizing {
+                dragState = .resizing(node)
+            } else if let clip = state.timeline[node.trackId]?[node.id] {
+                dragState = .clip(ClipDragState(
+                    trackId: node.trackId,
+                    clipId: node.id,
+                    startPoint: point,
+                    startOffsetDx: clip.clip.visualOffsetDx,
+                    startOffsetDy: clip.clip.visualOffsetDy
+                ))
+            } else {
+                dragState = .inactive
+            }
+        } else {
+            dragState = .inactive
+            state.selection = nil
+        }
+    }
+    
+    func inputDragged(to point: CGPoint) {
+        switch dragState {
+        case .resizing(let node):
+            if let nodeParent = node.parent {
+                node.moveResizer(to: convert(point, to: nodeParent))
+            }
+        case .clip(let clipState):
+            if var clip = state.timeline[clipState.trackId]?[clipState.clipId] {
+                clip.clip.visualOffsetDx = Double((point.x - clipState.startPoint.x) / size.width) + clipState.startOffsetDx
+                clip.clip.visualOffsetDy = Double((point.y - clipState.startPoint.y) / size.height) + clipState.startOffsetDy
+                state.timeline[clipState.trackId]?[clipState.clipId] = clip
+            }
+        default:
+            break
+        }
+    }
+    
+    func inputUp(at point: CGPoint) {
+        switch dragState {
+        case .resizing(let node):
+            node.finishResizing()
+        default:
+            break
+        }
+        dragState = .inactive
+    }
+}

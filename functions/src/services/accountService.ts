@@ -1,17 +1,19 @@
 import admin from "firebase-admin";
-import { createHash, randomUUID } from "crypto";
-import { ACTIVATION_HMAC_PEPPER } from "../config";
+import { randomUUID } from "crypto";
 import { getFirestore } from "../firestore";
+import { ownerEmail } from "../config";
 import { ApiError } from "../middleware/errorHandler";
+import { type SharedClipRecord, listSharedClips } from "./sharedClipService";
 
 export const BOT_API_CAPABILITIES = [
+  "auth.validate",
+  "installations.list",
+  "orders.lookup",
   "users.lookup",
   "users.link-discord",
   "users.admin",
   "users.status",
-  "users.subscription",
-  "users.features.grant",
-  "users.features.revoke"
+  "users.subscription"
 ] as const;
 
 type AccountStatus = "active" | "banned" | "terminated";
@@ -49,6 +51,7 @@ interface AppInstallationRecord {
   paidFeatures: string[];
   discordUserId: string;
   discordUsername: string;
+  ownerLocked: boolean;
   createdAt: string;
   updatedAt: string;
   lastSeenAt: string;
@@ -77,6 +80,7 @@ interface AppInstallationResolveInput {
   systemVersion?: string;
   appVersion?: string;
   buildVersion?: string;
+  ownerLocked?: boolean;
 }
 
 interface PublicUser {
@@ -120,10 +124,19 @@ interface PublicAppInstallation {
   paidFeatures: string[];
   discordUserId: string;
   discordUsername: string;
-  websiteUserId: string;
+  ownerLocked: boolean;
   createdAt: string;
   updatedAt: string;
   lastSeenAt: string;
+}
+
+interface PublicDeveloperInstallation {
+  installation: PublicAppInstallation;
+  linkedUser: PublicUser | null;
+  effectiveAccountStatus: AccountStatus;
+  effectiveSubscriptionTier: SubscriptionTier;
+  effectivePaidFeatures: string[];
+  hasPro: boolean;
 }
 
 interface PublicEntitlementUser {
@@ -132,6 +145,18 @@ interface PublicEntitlementUser {
   subscriptionTier: SubscriptionTier;
   paidFeatures: string[];
   updatedAt: string;
+}
+
+interface PublicAppUuidSummary {
+  lookup: {
+    appUuid: string;
+    websiteUserId: string;
+    resolvedFrom: "user" | "installation";
+  };
+  installation: PublicAppInstallation | null;
+  user: PublicAccount | null;
+  entitlements: PublicEntitlementUser;
+  sharedClips: SharedClipRecord[];
 }
 
 type PublicAccount = PublicUser | PublicStandaloneAppUser;
@@ -285,6 +310,7 @@ function normalizeInstallationRecord(source: Partial<AppInstallationRecord>, fal
     paidFeatures,
     discordUserId: sanitizeText(source.discordUserId),
     discordUsername: sanitizeText(source.discordUsername),
+    ownerLocked: Boolean(source.ownerLocked),
     createdAt,
     updatedAt,
     lastSeenAt
@@ -373,7 +399,6 @@ function publicEntitlementInstallation(installation: AppInstallationRecord): Pub
 }
 
 async function publicAppInstallation(installation: AppInstallationRecord): Promise<PublicAppInstallation> {
-  const linkedUser = await findUserByAppUuid(installation.appUuid);
 
   return {
     id: installation.id,
@@ -390,7 +415,7 @@ async function publicAppInstallation(installation: AppInstallationRecord): Promi
     paidFeatures: [...installation.paidFeatures],
     discordUserId: installation.discordUserId || "",
     discordUsername: installation.discordUsername || "",
-    websiteUserId: linkedUser?.id || "",
+    ownerLocked: installation.ownerLocked,
     createdAt: installation.createdAt,
     updatedAt: installation.updatedAt,
     lastSeenAt: installation.lastSeenAt
@@ -416,7 +441,8 @@ function normalizeLookupValue(key: LookupKey, value: string): string {
 function parseAccountLookup(source: Record<string, unknown>): AccountLookup {
   const primaryCandidates: AccountLookup[] = [];
   const email = sanitizeText(source.email);
-  const userId = sanitizeText(source.userId ?? source.websiteUserId);
+  // websiteUserId removed; use only appUuid or userId
+  const userId = sanitizeText(source.userId);
   const appUuid = sanitizeText(source.appUuid);
 
   if (email) {
@@ -467,6 +493,28 @@ async function findUserByDiscordUserId(discordUserId: string): Promise<UserRecor
   return snapshot.empty ? null : snapshotToUser(snapshot.docs[0]);
 }
 
+async function findUsersByAppUuids(appUuids: string[]): Promise<Map<string, UserRecord>> {
+  const normalizedAppUuids = Array.from(new Set(appUuids.map((appUuid) => appUuid.trim().toLowerCase()).filter(Boolean)));
+  const usersByAppUuid = new Map<string, UserRecord>();
+
+  for (let index = 0; index < normalizedAppUuids.length; index += 10) {
+    const chunk = normalizedAppUuids.slice(index, index + 10);
+    if (chunk.length === 0) {
+      continue;
+    }
+
+    const snapshot = await usersCollection().where("appUuid", "in", chunk).get();
+    snapshot.docs.forEach((documentSnapshot) => {
+      const user = snapshotToUser(documentSnapshot);
+      if (user) {
+        usersByAppUuid.set(user.appUuid, user);
+      }
+    });
+  }
+
+  return usersByAppUuid;
+}
+
 async function findInstallationByAppUuid(appUuid: string): Promise<AppInstallationRecord | null> {
   const snapshot = await installationsCollection().where("appUuid", "==", appUuid).limit(1).get();
   return snapshot.empty ? null : snapshotToInstallation(snapshot.docs[0]);
@@ -498,6 +546,13 @@ async function findInstallationForLookup(lookup: AccountLookup): Promise<AppInst
       return findInstallationByAppUuid(lookup.value);
     case "discordUserId":
       return findInstallationByDiscordUserId(lookup.value);
+    case "email": {
+      const user = await findUserByEmail(lookup.value);
+      if (user && user.appUuid) {
+        return findInstallationByAppUuid(user.appUuid);
+      }
+      return null;
+    }
     default:
       return null;
   }
@@ -518,21 +573,22 @@ async function requireExistingAccount(source: Record<string, unknown>): Promise<
   throw new ApiError(404, "MacClipper user not found.");
 }
 
-function buildActivationToken(userId: string, feature: string): string {
-  return createHash("sha256")
-    .update(`${sanitizeText(userId)}|${normalizeFeatureKey(feature)}|${ACTIVATION_HMAC_PEPPER}`)
-    .digest("hex");
-}
-
 function buildActivationURL(user: UserRecord, feature: string): string {
   const normalizedFeature = normalizeFeatureKey(feature);
-  const token = buildActivationToken(user.id, normalizedFeature);
-  const query = new URLSearchParams({
-    userId: user.id,
-    appUuid: user.appUuid || user.id,
-    feature: normalizedFeature,
-    token
-  });
+  const query = new URLSearchParams();
+
+  if (user.id) {
+    query.set("userId", user.id);
+  }
+
+  if (user.appUuid || user.id) {
+    query.set("appUuid", user.appUuid || user.id);
+  }
+
+  if (normalizedFeature) {
+    query.set("feature", normalizedFeature);
+  }
+
   return `${ACTIVATION_URL_SCHEME}?${query.toString()}`;
 }
 
@@ -547,6 +603,17 @@ async function persistUser(user: UserRecord, updates: Partial<UserRecord>): Prom
   );
 
   await usersCollection().doc(nextUser.id).set(nextUser);
+  const linkedInstallation = await findInstallationByAppUuid(nextUser.appUuid);
+  if (linkedInstallation) {
+    await persistInstallation(linkedInstallation, {
+      role: nextUser.role,
+      accountStatus: nextUser.accountStatus,
+      subscriptionTier: nextUser.subscriptionTier,
+      paidFeatures: nextUser.paidFeatures,
+      discordUserId: nextUser.discordUserId,
+      discordUsername: nextUser.discordUsername
+    });
+  }
   return nextUser;
 }
 
@@ -746,7 +813,8 @@ export async function resolveAppInstallation(source: Record<string, unknown>): P
     machineModel: sanitizeText(source.machineModel),
     systemVersion: sanitizeText(source.systemVersion),
     appVersion: sanitizeText(source.appVersion),
-    buildVersion: sanitizeText(source.buildVersion)
+    buildVersion: sanitizeText(source.buildVersion),
+    ownerLocked: Boolean(source.ownerLocked)
   };
 
   const machineIdentifier = normalizeMachineIdentifier(payload.machineIdentifier);
@@ -767,6 +835,7 @@ export async function resolveAppInstallation(source: Record<string, unknown>): P
           systemVersion: payload.systemVersion,
           appVersion: payload.appVersion,
           buildVersion: payload.buildVersion,
+          ownerLocked: payload.ownerLocked,
           updatedAt: timestamp,
           lastSeenAt: timestamp
         },
@@ -797,52 +866,7 @@ export async function resolveAppInstallation(source: Record<string, unknown>): P
       return { installation: nextInstallation, created: false };
     }
 
-    const requestedAppUuid = sanitizeText(payload.appUuid).toLowerCase();
-    if (requestedAppUuid) {
-      const requestedInstallation = await findInstallationByAppUuidInTransaction(transaction, requestedAppUuid);
-      if (requestedInstallation && (!requestedInstallation.machineIdentifier || requestedInstallation.machineIdentifier === machineIdentifier)) {
-        const nextInstallation = normalizeInstallationRecord(
-          {
-            ...requestedInstallation,
-            appUuid: requestedAppUuid,
-            machineIdentifier,
-            machineName: payload.machineName,
-            machineModel: payload.machineModel,
-            systemVersion: payload.systemVersion,
-            appVersion: payload.appVersion,
-            buildVersion: payload.buildVersion,
-            updatedAt: timestamp,
-            lastSeenAt: timestamp
-          },
-          requestedInstallation.id
-        );
-
-        transaction.set(installationsCollection().doc(nextInstallation.id), nextInstallation);
-        transaction.set(
-          machineIdentifierReservationsCollection().doc(encodeReservationKey(machineIdentifier)),
-          {
-            installationId: nextInstallation.id,
-            machineIdentifier,
-            createdAt: nextInstallation.createdAt,
-            updatedAt: timestamp
-          } satisfies MachineReservationRecord
-        );
-        transaction.set(
-          appUuidReservationsCollection().doc(encodeReservationKey(nextInstallation.appUuid)),
-          {
-            installationId: nextInstallation.id,
-            appUuid: nextInstallation.appUuid,
-            machineIdentifier,
-            createdAt: nextInstallation.createdAt,
-            updatedAt: timestamp
-          } satisfies AppUuidReservationRecord
-        );
-
-        return { installation: nextInstallation, created: false };
-      }
-    }
-
-    let candidateAppUuid = normalizeUuid(payload.appUuid);
+    let candidateAppUuid = normalizeUuid(undefined);
     while (!(await appUuidIsAvailableInTransaction(transaction, candidateAppUuid, machineIdentifier))) {
       candidateAppUuid = normalizeUuid(undefined);
     }
@@ -858,6 +882,7 @@ export async function resolveAppInstallation(source: Record<string, unknown>): P
         systemVersion: payload.systemVersion,
         appVersion: payload.appVersion,
         buildVersion: payload.buildVersion,
+        ownerLocked: payload.ownerLocked,
         createdAt: timestamp,
         updatedAt: timestamp,
         lastSeenAt: timestamp
@@ -927,9 +952,78 @@ export async function lookupEntitlements(source: Record<string, unknown>): Promi
   return { user: publicEntitlementInstallation(installation) };
 }
 
+export async function lookupAppUuidSummary(source: Record<string, unknown>): Promise<{ summary: PublicAppUuidSummary }> {
+  const appUuid = sanitizeText(source.appUuid).toLowerCase();
+  if (!appUuid) {
+    throw new ApiError(400, "Provide appUuid.");
+  }
+
+  const installation = await findInstallationByAppUuid(appUuid);
+  const user = await findUserByAppUuid(appUuid);
+
+  if (!installation && !user) {
+    throw new ApiError(404, "MacClipper user not found.");
+  }
+
+  const entitlements = user
+    ? publicEntitlementUser(user)
+    : publicEntitlementInstallation(installation!);
+  const sharedClips = await listSharedClips({ appUuid, limit: 24 });
+
+  return {
+    summary: {
+      lookup: {
+        appUuid,
+        websiteUserId: user?.id ?? "",
+        resolvedFrom: user ? "user" : "installation"
+      },
+      installation: installation ? await publicAppInstallation(installation) : null,
+      user: user ? publicAccount({ kind: "user", account: user }) : null,
+      entitlements,
+      sharedClips
+    }
+  };
+}
+
 export async function lookupAccount(source: Record<string, unknown>): Promise<{ user: PublicAccount }> {
   const account = await requireExistingAccount(source);
   return { user: publicAccount(account) };
+}
+
+export async function listTrackedInstallations(source: Record<string, unknown>): Promise<{ installations: PublicDeveloperInstallation[] }> {
+  const requestedLimit = Number.parseInt(sanitizeText(source.limit, "100"), 10);
+  const limit = Number.isFinite(requestedLimit)
+    ? Math.min(Math.max(requestedLimit, 1), 250)
+    : 100;
+
+  const snapshot = await installationsCollection()
+    .orderBy("lastSeenAt", "desc")
+    .limit(limit)
+    .get();
+
+  const installations = snapshot.docs
+    .map((documentSnapshot) => snapshotToInstallation(documentSnapshot))
+    .filter((installation): installation is AppInstallationRecord => installation !== null);
+
+  const linkedUsersByAppUuid = await findUsersByAppUuids(installations.map((installation) => installation.appUuid));
+  const developerInstallations = await Promise.all(
+    installations.map(async (installation) => {
+      const linkedUser = linkedUsersByAppUuid.get(installation.appUuid) ?? null;
+      const effectiveSubscriptionTier = linkedUser?.subscriptionTier ?? installation.subscriptionTier;
+      const effectivePaidFeatures = [...(linkedUser?.paidFeatures ?? installation.paidFeatures)];
+
+      return {
+        installation: await publicAppInstallation(installation),
+        linkedUser: linkedUser ? publicUser(linkedUser) : null,
+        effectiveAccountStatus: linkedUser?.accountStatus ?? installation.accountStatus,
+        effectiveSubscriptionTier,
+        effectivePaidFeatures,
+        hasPro: effectiveSubscriptionTier === "pro" || effectivePaidFeatures.includes("4k-pro")
+      } satisfies PublicDeveloperInstallation;
+    })
+  );
+
+  return { installations: developerInstallations };
 }
 
 export async function linkDiscord(source: Record<string, unknown>): Promise<{ user: PublicAccount }> {
@@ -943,6 +1037,16 @@ export async function linkDiscord(source: Record<string, unknown>): Promise<{ us
   const nextAccount = await persistAccount(account, {
     discordUserId,
     discordUsername
+  });
+
+  return { user: publicAccount(nextAccount) };
+}
+
+export async function unlinkDiscord(source: Record<string, unknown>): Promise<{ user: PublicAccount }> {
+  const account = await requireExistingAccount(source);
+  const nextAccount = await persistAccount(account, {
+    discordUserId: "",
+    discordUsername: ""
   });
 
   return { user: publicAccount(nextAccount) };
@@ -1011,9 +1115,14 @@ export async function grantAccountFeature(source: Record<string, unknown>): Prom
 
   const currentPaidFeatures = account.account.paidFeatures;
   const nextAccount = await persistAccount(account, {
-    subscriptionTier: feature === "4k-pro" ? "pro" : account.account.subscriptionTier,
+    subscriptionTier: account.account.subscriptionTier,
     paidFeatures: normalizeFeatureKeys([feature, ...currentPaidFeatures])
   });
+
+  // Clear any billing override lock so future Stripe events can sync normally.
+  if (feature === "4k-pro") {
+    await setBillingOverrideLock(nextAccount.account.appUuid, false);
+  }
 
   return {
     user: publicAccount(nextAccount),
@@ -1030,9 +1139,180 @@ export async function revokeAccountFeature(source: Record<string, unknown>): Pro
   const account = await requireExistingAccount(source);
   const remainingFeatures = normalizeFeatureKeys(account.account.paidFeatures.filter((entry) => entry !== feature));
   const nextAccount = await persistAccount(account, {
-    subscriptionTier: feature === "4k-pro" && remainingFeatures.length === 0 ? "free" : account.account.subscriptionTier,
+    subscriptionTier: account.account.subscriptionTier,
     paidFeatures: remainingFeatures
   });
 
+  // Lock billing sync so Stripe webhooks cannot re-grant Pro until an admin explicitly re-grants.
+  if (feature === "4k-pro") {
+    await setBillingOverrideLock(nextAccount.account.appUuid, true);
+  }
+
   return { user: publicAccount(nextAccount) };
+}
+
+const BILLING_OVERRIDES_COLLECTION = "billingOverrides";
+
+// A "billing override lock" prevents Stripe webhooks/verify from re-granting Pro
+// after an admin has explicitly revoked it via the bot.
+export async function getBillingOverrideLocked(appUuid: string): Promise<boolean> {
+  if (!appUuid) {
+    return false;
+  }
+  const snapshot = await getFirestore().collection(BILLING_OVERRIDES_COLLECTION).doc(appUuid).get();
+  return Boolean(snapshot.exists && snapshot.data()?.billingOverrideLocked);
+}
+
+export async function clearBillingOverrideLock(appUuid: string): Promise<void> {
+  await setBillingOverrideLock(appUuid, false);
+}
+
+async function setBillingOverrideLock(appUuid: string, locked: boolean): Promise<void> {
+  if (!appUuid) {
+    return;
+  }
+  await getFirestore().collection(BILLING_OVERRIDES_COLLECTION).doc(appUuid).set(
+    { billingOverrideLocked: locked, updatedAt: nowIsoTimestamp() },
+    { merge: true }
+  );
+}
+
+const APP_LINK_REQUESTS_COLLECTION = "appLinkRequests";
+
+export async function registerAppLink(source: Record<string, unknown>): Promise<void> {
+  const appUuid = sanitizeText(source.appUuid).toLowerCase();
+  const websiteUserId = sanitizeText(source.websiteUserId);
+  const attemptId = sanitizeText(source.attemptId);
+
+  if (!appUuid || !UUID_PATTERN.test(appUuid)) {
+    throw new ApiError(400, "appUuid is required and must be a valid UUID.");
+  }
+  if (!websiteUserId) {
+    throw new ApiError(400, "websiteUserId is required.");
+  }
+
+  // Check if the installation is owner-locked
+  const installation = await findInstallationByAppUuid(appUuid);
+  if (installation?.ownerLocked) {
+    const configuredOwnerEmail = ownerEmail();
+    if (!configuredOwnerEmail) {
+      throw new ApiError(403, "This app installation is locked and no owner email is configured.");
+    }
+    // Look up the requesting user to verify their email
+    const user = await findUserById(websiteUserId);
+    const userEmail = (user?.email || "").trim().toLowerCase();
+    if (userEmail !== configuredOwnerEmail) {
+      throw new ApiError(403, "This app installation is locked and can only be linked to the owner account.");
+    }
+  }
+
+  const docId = `${websiteUserId}:${appUuid}`;
+  const now = nowIsoTimestamp();
+  await getFirestore().collection(APP_LINK_REQUESTS_COLLECTION).doc(docId).set({
+    appUuid,
+    websiteUserId,
+    attemptId,
+    isLinked: true,
+    linkedAt: now,
+    updatedAt: now
+  }, { merge: true });
+}
+
+export async function lookupAppLinkByWebsiteUserId(source: Record<string, unknown>): Promise<{ appUuid: string; linkedAt: string; isLinked: boolean; attemptId: string }> {
+  const websiteUserId = sanitizeText(source.websiteUserId);
+  if (!websiteUserId) {
+    throw new ApiError(400, "websiteUserId is required.");
+  }
+
+  const snapshot = await getFirestore()
+    .collection(APP_LINK_REQUESTS_COLLECTION)
+    .where("websiteUserId", "==", websiteUserId)
+    .limit(20)
+    .get();
+
+  if (snapshot.empty) {
+    return {
+      appUuid: "",
+      linkedAt: "",
+      isLinked: false,
+      attemptId: ""
+    };
+  }
+
+  const latestDoc = snapshot.docs
+    .map((doc) => doc.data())
+    .filter((data) => sanitizeText(data.appUuid))
+    .sort((a, b) => {
+      const aTime = Date.parse(String(a.linkedAt || a.updatedAt || ""));
+      const bTime = Date.parse(String(b.linkedAt || b.updatedAt || ""));
+      return (Number.isFinite(bTime) ? bTime : 0) - (Number.isFinite(aTime) ? aTime : 0);
+    })[0];
+
+  if (!latestDoc) {
+    return {
+      appUuid: "",
+      linkedAt: "",
+      isLinked: false,
+      attemptId: ""
+    };
+  }
+
+  return {
+    appUuid: String(latestDoc.appUuid || ""),
+    linkedAt: String(latestDoc.linkedAt || latestDoc.updatedAt || ""),
+    isLinked: true,
+    attemptId: String(latestDoc.attemptId || "")
+  };
+}
+
+export async function unlinkApp(source: Record<string, unknown>): Promise<void> {
+  const websiteUserId = sanitizeText(source.websiteUserId);
+  if (!websiteUserId) {
+    throw new ApiError(400, "websiteUserId is required.");
+  }
+
+  const snapshot = await getFirestore()
+    .collection(APP_LINK_REQUESTS_COLLECTION)
+    .where("websiteUserId", "==", websiteUserId)
+    .get();
+
+  if (snapshot.empty) {
+    return;
+  }
+
+  const batch = getFirestore().batch();
+  snapshot.docs.forEach((doc) => batch.delete(doc.ref));
+  await batch.commit();
+}
+
+const BOT_CONFIG_COLLECTION = "botConfig";
+
+export async function getBotConfig(source: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const guildId = sanitizeText(source.guildId);
+  if (!guildId) {
+    throw new ApiError(400, "guildId is required.");
+  }
+
+  const snapshot = await getFirestore().collection(BOT_CONFIG_COLLECTION).doc(guildId).get();
+  if (!snapshot.exists) {
+    return {};
+  }
+
+  return snapshot.data() as Record<string, unknown>;
+}
+
+export async function setBotConfig(source: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const guildId = sanitizeText(source.guildId);
+  if (!guildId) {
+    throw new ApiError(400, "guildId is required.");
+  }
+
+  const config: Record<string, string> = {};
+  for (const [key, value] of Object.entries(source)) {
+    if (key === "guildId") continue;
+    config[key] = String(value ?? "");
+  }
+
+  await getFirestore().collection(BOT_CONFIG_COLLECTION).doc(guildId).set(config, { merge: true });
+  return config;
 }

@@ -31,6 +31,36 @@ npm install
 npm run web:start
 ```
 
+## Bring Everything Up
+```bash
+cd /Users/meteorite/macclipper
+./initialize
+```
+
+That single command will:
+- build Firebase Functions
+- build the website bundle used by Firebase Hosting
+- package `dist/MacClipper.app`
+- start the local bot/API on port `4173`
+- start Firebase Hosting, Functions, and Firestore emulators
+- open the Mac app, local API health URL, local website, and Firebase Emulator UI
+
+The local hosted website opens on `http://127.0.0.1:5005` by default so it does not collide with macOS services that often occupy port `5000`.
+
+To also deploy the hosted stack before opening the live URLs:
+
+```bash
+cd /Users/meteorite/macclipper
+./initialize --deploy
+```
+
+Or run it through npm:
+
+```bash
+cd /Users/meteorite/macclipper
+npm run initialize -- --deploy
+```
+
 That server exposes the local JSON API and bot-facing API on:
 
 ```text
@@ -63,6 +93,8 @@ The bot contract now includes:
 - `POST /api/bot/users/features/revoke`
 - `POST /api/app-installations/resolve`
 - `GET /api/entitlements/by-user-id`
+
+For always-on production hosting (independent from website deploys), use the dedicated Cloud Run bot setup documented in `docs/bot-cloud-run-hosting.md`.
 
 `/api/bot/users/features/grant` returns a `macclipper://purchase-complete?...` activation URL, and linked apps can also pick the same feature up live from `/api/entitlements/by-user-id`.
 
@@ -100,6 +132,15 @@ cd /Users/meteorite/macclipper
 MACCLIPPER_BUILD_ARCH=arm64 ./scripts/package_app.sh
 MACCLIPPER_BUILD_ARCH=x86_64 ./scripts/package_app.sh
 ```
+
+For builds you hand to other people, use a `Developer ID Application` certificate and notarize the app. The packaging script now prefers `Developer ID Application` automatically and will notarize plus staple the app when you provide a notarytool keychain profile:
+
+```bash
+cd /Users/meteorite/macclipper
+MACCLIPPER_NOTARY_PROFILE="macclipper-notary" ./scripts/package_app.sh
+```
+
+If the script falls back to `Apple Development` or ad-hoc signing, other Macs can still show Gatekeeper verification warnings and may force the user into `Privacy & Security` to open the app manually.
 
 ## Build a drag-and-drop `.dmg`
 ```bash

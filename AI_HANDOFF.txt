@@ -1,0 +1,239 @@
+MacClipper Project Handoff
+
+Purpose
+- MacClipper is a macOS replay-buffer clipper and cloud-sharing app with a companion website, Firebase backend/functions, Supabase auth/data, and a Discord bot.
+- This file is the high-signal resume note for a fresh AI after a machine reset.
+
+How to use this file
+- Read the "Current state" and "What currently matters most" sections first.
+- Use the "Build and verify" section when you need to change code.
+- Use the "Where to add new things" section when you are adding features instead of hunting around the repo.
+
+Core folders
+- macOS app: /Users/meteorite/macclipper/Sources/MacClipper
+- Website: /Users/meteorite/macclipper/website
+- Firebase functions/API: /Users/meteorite/macclipper/functions
+- Local backend/API: /Users/meteorite/macclipper/backend
+- Discord bot (separate workspace): /Users/meteorite/MacClipperBot
+- One-command launcher: /Users/meteorite/macclipper/run_everything.sh
+
+Build and verify
+- Swift app build: cd /Users/meteorite/macclipper && swift build
+- Swift app packaging: ./scripts/package_app.sh
+- Swift app DMG packaging: ./scripts/build_dmg.sh
+- Website build: cd /Users/meteorite/macclipper/website && npm run build
+- Firebase functions build: cd /Users/meteorite/macclipper/functions && npm run build
+- Local launcher smoke test: cd /Users/meteorite/macclipper && ./run_everything.sh
+- Bot syntax check: cd /Users/meteorite/MacClipperBot && python3 -m py_compile bot.py
+
+What currently matters most
+- Membership upgrade 404 fix: the website Membership CTA should go to /support, not /buy. /buy now redirects to /support.
+- The support page owns checkout and portal actions.
+- The app settings label has been renamed from 4K Pro to MacClipper Pro in the UI copy.
+- Echo prevention: if the selected mic looks like a loopback/monitor virtual device and System Audio is on, the app suppresses microphone capture automatically to reduce doubled/echoed audio.
+- A reset-friendly launcher script exists and starts backend API, Firebase emulators, website dev server, and the bot.
+
+How the product fits together
+- The Mac app captures clips locally and can upload/share them to the cloud.
+- The website is the user-facing account, community, support, and billing surface.
+- Firebase functions expose the billing, entitlement, and shared-clip API.
+- Supabase stores social/account tables used by the website.
+- The backend directory still hosts local developer API routes and bot-facing helpers.
+- The Discord bot is a separate Python process used for entitlement/admin workflows.
+
+Startup and run commands
+- Build Swift app: cd /Users/meteorite/macclipper && swift build
+- Package app for release: ./scripts/package_app.sh
+- Build Firebase functions: cd /Users/meteorite/macclipper/functions && npm run build
+- Build website: cd /Users/meteorite/macclipper/website && npm run build
+- Run everything locally: cd /Users/meteorite/macclipper && ./run_everything.sh
+- Start the separate Discord bot manually: cd /Users/meteorite/MacClipperBot && DISCORD_TOKEN='...' python3 bot.py
+
+How to add new things
+- Add a new website page: create a component in website/src/components and register it in website/src/App.js.
+- Add a new website route: update website/src/App.js and make sure the page is reachable from the relevant nav or card.
+- Add a new billing or entitlement action: start in website/src/lib/cloudAccount.js, then wire the UI in Support.js or Settings.js.
+- Add a new app setting: put the state in Sources/MacClipper/AppModel.swift and render it in SettingsView.swift and MenuSettingsPage.swift.
+- Add a new capture or export behavior: change Sources/MacClipper/ReplayBufferRecorder.swift first, then adjust AppModel.swift if state or policy changes are needed.
+- Add a new bot command: update /Users/meteorite/MacClipperBot/bot.py and keep Pro changes tied to real entitlement updates.
+- Add a new Firebase API route: update functions/src/routes and validate with npm run build.
+- Add a new backend route: update backend/server.js or the related service file under backend/runtime and document the request/response shape.
+- Add a new public-facing asset or icon: update scripts/generate_app_icon.swift or the relevant packaging script, then rebuild the app.
+
+run_everything.sh behavior
+- Starts backend API: node backend/server.js
+- Starts Firebase emulators: cd functions && npm run serve
+- Starts website dev server: cd website && npm start
+- Starts Discord bot using DISCORD_TOKEN from the shell or bot/.env
+- Writes logs to /Users/meteorite/macclipper/.run/logs
+- Writes PID files to /Users/meteorite/macclipper/.run/pids
+- Detects already-running services and skips duplicates when possible
+
+Route and feature map
+- website/src/App.js: route table and page wiring.
+- website/src/components/Settings.js: account settings, membership, linked-app state, portal entry.
+- website/src/components/Support.js: checkout start, portal open, billing sync after purchase.
+- website/src/components/OrderConfirmation.js: post-checkout verification and Mac deep link.
+- website/src/components/Clips.js: cloud posting and clip library.
+- website/src/components/Watch.js: community feed.
+- website/src/lib/cloudAccount.js: checkout, portal, entitlement, and subscription fetch helpers.
+- website/src/lib/appLinkState.js: local storage for linked app UUID state.
+- website/supabase/setup.sql: full Supabase schema bootstrap.
+- functions/src/config.ts: billing URLs and runtime config.
+- functions/src/routes/publicRoutes.ts: public API routes.
+- functions/src/services/accountService.ts: entitlement/account lookup helpers.
+- backend/server.js: local API and bot-facing routes.
+- Sources/MacClipper/AppModel.swift: app state, entitlement sync, capture policy.
+- Sources/MacClipper/ReplayBufferRecorder.swift: ScreenCaptureKit and AVFoundation recording.
+- Sources/MacClipper/AudioCaptureDeviceCatalog.swift: input-device discovery and echo heuristics.
+- Sources/MacClipper/SettingsView.swift: full settings UI.
+- Sources/MacClipper/MenuSettingsPage.swift: in-menu settings UI.
+
+Implementation rules that kept mattering
+- Do not add a fake success message unless the backend state was actually verified.
+- Keep app UUID entitlements separate from website user identity until the link state exists.
+- Keep billing actions on the support page or a real checkout endpoint, not a dead placeholder page.
+- When a route is shared from old copy, add a redirect instead of leaving the old path broken.
+- If audio echo appears, first check for a loopback/monitor mic plus System Audio at the same time.
+
+Important URLs and routes
+- Production site: https://macclipper-ce502.web.app
+- Canonical domain: https://macclipper.co
+- Website billing page: /support
+- Checkout return page: /order-confirmation?session_id={CHECKOUT_SESSION_ID}
+- Admin portal return: /settings
+- Community page: /community
+- Shared clip page: /shared/:shareId
+- /buy is a redirect to /support
+
+Architecture summary
+- Mac app is SwiftUI + ScreenCaptureKit + AVFoundation + Carbon hotkeys.
+- Website is React and uses Supabase for auth and clip metadata.
+- Firebase functions serve the API, billing, entitlements, and shared-clips flows.
+- Local backend/backend server still exists for development and some app/bot coordination.
+- Discord bot is a separate Python project at /Users/meteorite/MacClipperBot.
+
+Current data and entitlement model
+- Supabase auth is used for the website identity layer.
+- App UUIDs are the Mac-install identity used for entitlement sync.
+- Website user IDs are used for billing/checkout verification.
+- The linked-app state bridges website user IDs and Mac app UUIDs.
+- Pro entitlement should reflect actual backend subscription state, not only local UI state.
+
+Supabase state
+- Supabase now has the needed tables created: clips, profiles, favourites, clip_likes, clip_comments, profile_subscriptions.
+- The prior posting blocker was that the tables were missing, not just an RLS policy issue.
+- The setup SQL file lives at /Users/meteorite/macclipper/website/supabase/setup.sql.
+
+Website notes
+- Membership settings live in website/src/components/Settings.js.
+- Support/billing flows live in website/src/components/Support.js.
+- Checkout session creation is handled by website/src/lib/cloudAccount.js using /billing/create-checkout-session.
+- The route table is in website/src/App.js.
+- Community feed page is website/src/components/Watch.js.
+- Clip posting flow is website/src/components/Clips.js.
+
+How to extend the website safely
+- For account or membership work, start with Settings.js and Support.js together.
+- For billing success or return behavior, check OrderConfirmation.js plus functions/src/config.ts.
+- For community upload/posting issues, inspect Clips.js first and then the API route it calls.
+- For new routes, add the route in App.js and confirm there is no conflicting old path.
+- For shared clip or community feed work, verify the backend data shape before changing the UI.
+
+Mac app notes
+- Main model: Sources/MacClipper/AppModel.swift
+- Replay recorder: Sources/MacClipper/ReplayBufferRecorder.swift
+- Settings views: Sources/MacClipper/SettingsView.swift and Sources/MacClipper/MenuSettingsPage.swift
+- The app currently uses AppResources/AppIcon.icns generated by scripts/generate_app_icon.swift.
+- 4K/Pro in the UI is now labeled MacClipper Pro.
+- The app can still show hasUnlocked4KPro internally; the user-facing copy should say MacClipper Pro.
+
+How to extend the Mac app safely
+- Change capture defaults in AppModel.swift, not only in the UI.
+- If a setting should persist, make sure it is saved in the shared settings model and reloaded at startup.
+- If a UI label changes, update both the full settings window and the menu-page settings surface.
+- If a new capture input or output path is added, test the packaging path as well as swift build.
+- If you touch audio routing, re-check echo and mic suppression behavior.
+
+Echo / audio guidance
+- Common echo cause: enabling System Audio while also selecting a loopback/monitor virtual microphone can double-capture audio.
+- The current safeguard checks microphone names for terms like BlackHole, Loopback, Virtual, Monitor, Stereo Mix, System Mix, Aggregate, VB-Audio, Soundflower.
+- If users still hear echo, the first things to test are:
+  - Disable System Audio when using a loopback mic.
+  - Use a physical microphone instead of a loopback/monitor input.
+  - Confirm the selected mic is not a virtual monitor device.
+
+  How to debug audio complaints
+  - Check whether the user is recording System Audio, microphone, or both.
+  - Check whether their selected mic is a loopback device.
+  - Check whether the app is suppressing microphone capture because the device looks like a monitor/virtual input.
+  - If the problem is still unclear, inspect ReplayBufferRecorder.swift and AppModel.swift together.
+
+Bot notes
+- The bot project lives at /Users/meteorite/MacClipperBot.
+- It uses Python, discord.py, and config.env.
+- It was successfully started with DISCORD_TOKEN from the MacClipper bot token source.
+- A previous bug was that Pro changes could say confirmed without actually changing the entitlement state; app UUID Pro operations now need to resolve to real entitlement/subscription changes.
+- The bot should be started from its own directory, not the macclipper repo root.
+
+Bot workflow notes
+- Run the bot from /Users/meteorite/MacClipperBot.
+- Keep bot entitlement changes aligned with the backend source of truth.
+- If a command claims success, confirm the corresponding entitlement or subscription changed.
+- Avoid adding bot behavior that bypasses verification on app UUID commands.
+
+Deployment notes
+- Website builds should be validated with npm --prefix website run build.
+- Firebase functions should be validated with npm --prefix functions run build.
+- Swift changes should be validated from the macclipper root with swift build.
+- Packaging changes are usually shipped by rerunning ./scripts/package_app.sh.
+
+Website rerun and host update commands (recent proven flow)
+- Kill stale website dev servers and free port 3000:
+  - pkill -9 -f "react-scripts|webpack"
+  - lsof -ti:3000 | xargs kill -9 2>/dev/null
+- Start website dev server with persistent logs:
+  - cd /Users/meteorite/macclipper/website && npm start > /Users/meteorite/macclipper/.run/logs/website.log 2>&1 &
+- Verify local compile:
+  - tail -20 /Users/meteorite/macclipper/.run/logs/website.log
+  - expected line: "webpack compiled successfully"
+- Build production website before deploy:
+  - cd /Users/meteorite/macclipper/website && npm run build
+- Build Firebase functions before deploy:
+  - cd /Users/meteorite/macclipper/functions && npm run build
+- Deploy hosted website + API together:
+  - cd /Users/meteorite/macclipper && firebase deploy --only hosting,functions --project macclipper-ce502 --non-interactive
+- Verify deployed host/API routes:
+  - curl -i -X OPTIONS https://macclipper.co/api/app-link/unlink
+  - curl -i -X OPTIONS https://macclipper-ce502.web.app/api/app-link/unlink
+
+Suggested verification checklist
+- Build the touched surface.
+- Confirm the route or button actually reaches the intended screen.
+- Confirm the backend state changed if the UI says a purchase or entitlement succeeded.
+- Check the packaged app if the change affects the Mac app UI or settings.
+- Check launcher behavior if the change affects startup or bot orchestration.
+
+Known useful files
+- /Users/meteorite/macclipper/run_everything.sh
+- /Users/meteorite/macclipper/website/src/App.js
+- /Users/meteorite/macclipper/website/src/components/Settings.js
+- /Users/meteorite/macclipper/website/src/components/Support.js
+- /Users/meteorite/macclipper/website/src/lib/cloudAccount.js
+- /Users/meteorite/macclipper/Sources/MacClipper/AppModel.swift
+- /Users/meteorite/macclipper/Sources/MacClipper/ReplayBufferRecorder.swift
+- /Users/meteorite/macclipper/Sources/MacClipper/SettingsView.swift
+- /Users/meteorite/macclipper/Sources/MacClipper/MenuSettingsPage.swift
+- /Users/meteorite/macclipper/website/supabase/setup.sql
+
+If you need to keep going from here
+- Start with the file in the relevant section above.
+- Make the smallest change that proves the behavior.
+- Rebuild the touched layer.
+- Only widen to neighboring files if the first check fails or the behavior is split across layers.
+
+Current state at last check
+- Launcher script works.
+- Swift app builds.
+- Bot startup and service orchestration were working.
+- The /buy 404 issue is now fixed by redirecting to /support.

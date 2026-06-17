@@ -4,18 +4,35 @@ import PackageDescription
 let package = Package(
     name: "MacClipper",
     platforms: [
-        .macOS(.v15)
+        .macOS("12.3")
     ],
     products: [
-        .executable(name: "MacClipper", targets: ["MacClipper"])
+        .executable(name: "MacClipper", targets: ["MacClipper"]),
+        .executable(name: "MacClipperUninstaller", targets: ["MacClipperUninstaller"])
     ],
     dependencies: [
         .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.9.1")
     ],
     targets: [
+        .target(
+            name: "MiniCutEditor",
+            swiftSettings: [
+                .unsafeFlags([
+                    "-Xfrontend",
+                    "-strict-concurrency=minimal"
+                ])
+            ],
+            linkerSettings: [
+                .linkedFramework("AVFoundation"),
+                .linkedFramework("AppKit"),
+                .linkedFramework("QuartzCore"),
+                .linkedFramework("SpriteKit")
+            ]
+        ),
         .executableTarget(
             name: "MacClipper",
             dependencies: [
+                "MiniCutEditor",
                 .product(name: "Sparkle", package: "Sparkle")
             ],
             linkerSettings: [
@@ -24,6 +41,7 @@ let package = Package(
                 .linkedFramework("ScreenCaptureKit"),
                 .linkedFramework("Speech"),
                 .linkedFramework("AppKit"),
+                .linkedFramework("SpriteKit"),
                 .linkedFramework("IOKit"),
                 .linkedFramework("Carbon"),
                 .unsafeFlags([
@@ -32,6 +50,12 @@ let package = Package(
                     "-Xlinker",
                     "@executable_path/../Frameworks"
                 ])
+            ]
+        ),
+        .executableTarget(
+            name: "MacClipperUninstaller",
+            linkerSettings: [
+                .linkedFramework("AppKit")
             ]
         )
     ]

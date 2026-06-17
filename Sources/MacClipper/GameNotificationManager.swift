@@ -2,6 +2,11 @@ import SwiftUI
 import AppKit
 import QuickLookThumbnailing
 
+enum GameNotificationTone {
+    case standard
+    case celebratory
+}
+
 struct GameNotificationAction: Identifiable {
     let id = UUID()
     let title: String
@@ -30,7 +35,8 @@ final class GameNotificationManager {
         message: String,
         sourceApp: ClipSourceApp?,
         previewURL: URL? = nil,
-        actions: [GameNotificationAction] = []
+        actions: [GameNotificationAction] = [],
+        tone: GameNotificationTone = .standard
     ) {
         hideTask?.cancel()
 
@@ -47,7 +53,8 @@ final class GameNotificationManager {
                     sourceApp: sourceApp,
                     icon: GameNotificationAppIconProvider.icon(for: sourceApp, size: 30),
                     previewImage: previewImage,
-                    actions: actions
+                    actions: actions,
+                    tone: tone
                 )
             )
             contentView.translatesAutoresizingMaskIntoConstraints = false
@@ -73,7 +80,7 @@ final class GameNotificationManager {
                 self?.hideAnimated()
             }
             self.hideTask = task
-            let displayDuration = hasActionBar ? 8.0 : 3.0
+            let displayDuration = hasActionBar ? 8.0 : (tone == .celebratory ? 5.2 : 3.0)
             DispatchQueue.main.asyncAfter(deadline: .now() + displayDuration, execute: task)
         }
     }
@@ -166,12 +173,53 @@ private struct GameNotificationToastView: View {
     let icon: NSImage?
     let previewImage: NSImage?
     let actions: [GameNotificationAction]
+    let tone: GameNotificationTone
+
+    private var isCelebratory: Bool {
+        tone == .celebratory
+    }
+
+    private var accentColor: Color {
+        isCelebratory
+            ? Color(red: 0.97, green: 0.70, blue: 0.18)
+            : Color(red: 0.03, green: 0.60, blue: 0.98)
+    }
+
+    private var backgroundStyle: AnyShapeStyle {
+        if isCelebratory {
+            return AnyShapeStyle(
+                LinearGradient(
+                    colors: [
+                        Color(red: 1.00, green: 0.97, blue: 0.87),
+                        Color(red: 1.00, green: 0.92, blue: 0.78)
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            )
+        }
+
+        return AnyShapeStyle(Color(red: 0.97, green: 0.97, blue: 0.98))
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
+            if isCelebratory {
+                Text("PRO UNLOCKED")
+                    .font(.system(size: 10, weight: .black))
+                    .kerning(1)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(
+                        Color.white.opacity(0.9),
+                        in: Capsule(style: .continuous)
+                    )
+                    .foregroundStyle(Color(red: 0.52, green: 0.31, blue: 0.00))
+            }
+
             HStack(spacing: 12) {
                 RoundedRectangle(cornerRadius: 4, style: .continuous)
-                    .fill(Color(red: 0.03, green: 0.60, blue: 0.98))
+                    .fill(accentColor)
                     .frame(width: 5)
 
                 VStack(alignment: .leading, spacing: 6) {
@@ -181,6 +229,10 @@ private struct GameNotificationToastView: View {
                                 Image(nsImage: icon)
                                     .resizable()
                                     .scaledToFit()
+                            } else if isCelebratory {
+                                Image(systemName: "sparkles")
+                                    .font(.system(size: 16, weight: .black))
+                                    .foregroundStyle(accentColor)
                             } else {
                                 Image(systemName: "bell.fill")
                                     .font(.system(size: 15, weight: .semibold))
@@ -199,15 +251,15 @@ private struct GameNotificationToastView: View {
 
                             Text(title)
                                 .font(.system(size: 15, weight: .bold))
-                                .foregroundStyle(Color(red: 0.10, green: 0.11, blue: 0.14))
+                                .foregroundStyle(isCelebratory ? Color(red: 0.39, green: 0.19, blue: 0.00) : Color(red: 0.10, green: 0.11, blue: 0.14))
                                 .lineLimit(1)
                         }
                     }
 
                     Text(message)
                         .font(.system(size: 13))
-                        .foregroundStyle(Color.black.opacity(0.72))
-                        .lineLimit(2)
+                        .foregroundStyle(isCelebratory ? Color(red: 0.34, green: 0.24, blue: 0.08) : Color.black.opacity(0.72))
+                        .lineLimit(isCelebratory ? 3 : 2)
                 }
 
                 Spacer(minLength: 0)
@@ -239,15 +291,12 @@ private struct GameNotificationToastView: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
         .frame(width: 430, alignment: .leading)
-        .background(
-            Color(red: 0.97, green: 0.97, blue: 0.98),
-            in: RoundedRectangle(cornerRadius: 16, style: .continuous)
-        )
+        .background(backgroundStyle, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(Color.black.opacity(0.08), lineWidth: 1)
+                .stroke(isCelebratory ? accentColor.opacity(0.45) : Color.black.opacity(0.08), lineWidth: 1)
         )
-        .shadow(color: .black.opacity(0.16), radius: 16, y: 8)
+        .shadow(color: isCelebratory ? accentColor.opacity(0.28) : .black.opacity(0.16), radius: 16, y: 8)
     }
 }
 
@@ -274,12 +323,13 @@ private struct NotificationActionChip: View {
     }
 }
 
+@MainActor
 private enum GameNotificationAppIconProvider {
     static func icon(for sourceApp: ClipSourceApp?, size: CGFloat) -> NSImage? {
         guard let sourceApp,
               let bundleIdentifier = sourceApp.bundleIdentifier,
               let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleIdentifier) else {
-            return nil
+            return MacClipperIconAsset.image(size: size)
         }
 
         let icon = NSWorkspace.shared.icon(forFile: appURL.path)

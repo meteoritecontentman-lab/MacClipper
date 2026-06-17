@@ -14,7 +14,6 @@ const UPLOAD_DIR_DEFAULT = path.join(RUNTIME_DIR, "uploads");
 const CONFIG_PATH = path.join(BACKEND_DIR, "config.env");
 const RECOVERY_PATH = path.join(BACKEND_DIR, ".config.env.password");
 const ACTIVATION_URL_SCHEME = "macclipper://purchase-complete";
-const ACTIVATION_PEPPER = "macclipper-app-feature-grant-v1";
 const ACCOUNT_STATUS_VALUES = new Set(["active", "banned", "terminated"]);
 const SUBSCRIPTION_TIERS = new Set(["free", "pro"]);
 const BOT_API_CAPABILITIES = Object.freeze([
@@ -265,7 +264,9 @@ function defaultPaidFeaturesForTier(tier) {
 
 function normalizeUserRecord(user) {
   const id = sanitizeText(user.id, crypto.randomUUID());
-  const subscriptionTier = normalizeSubscriptionTier(user.subscriptionTier || (Array.isArray(user.paidFeatures) && user.paidFeatures.length ? "pro" : "free"));
+  // Only set Pro if explicitly set, not based on paidFeatures
+  const subscriptionTier = normalizeSubscriptionTier(user.subscriptionTier);
+  // Only grant paid features if tier is pro
   const paidFeatures = normalizeFeatureKeys([
     ...defaultPaidFeaturesForTier(subscriptionTier),
     ...(Array.isArray(user.paidFeatures) ? user.paidFeatures : [])
@@ -385,7 +386,7 @@ function publicAppInstallation(installation) {
     paidFeatures: installation.paidFeatures,
     discordUserId: installation.discordUserId || "",
     discordUsername: installation.discordUsername || "",
-    websiteUserId: linkedUserIdForAppUuid(installation.appUuid),
+    // websiteUserId removed: use only appUuid
     createdAt: installation.createdAt,
     updatedAt: installation.updatedAt,
     lastSeenAt: installation.lastSeenAt
@@ -417,8 +418,8 @@ function publicStandaloneAppUser(installation) {
   };
 }
 
-function nextAvailableAppUuid(requestedAppUuid, installations, machineIdentifier) {
-  let candidate = normalizeUuid(requestedAppUuid);
+function nextAvailableAppUuid(installations, machineIdentifier) {
+  let candidate = normalizeUuid(null);
 
   while (installations.some((entry) => entry.machineIdentifier !== machineIdentifier && entry.appUuid === candidate)) {
     candidate = normalizeUuid(null);
@@ -434,7 +435,7 @@ function revokeSessionsForUser(userId) {
 function parseUserLookup(source) {
   const candidates = [
     ["email", sanitizeText(source.email).toLowerCase()],
-    ["userId", sanitizeText(source.userId || source.websiteUserId)],
+    ["userId", sanitizeText(source.userId)],
     ["appUuid", sanitizeText(source.appUuid)],
     ["discordUserId", sanitizeText(source.discordUserId)]
   ].filter(([, value]) => value);
@@ -543,31 +544,24 @@ function publicAccount(accountContext) {
   return publicStandaloneAppUser(accountContext.account);
 }
 
-function buildActivationToken(userId, feature) {
-  const normalizedUserId = sanitizeText(userId);
-  const normalizedFeature = normalizeFeatureKey(feature);
-
-  if (!normalizedUserId || !normalizedFeature) {
-    return "";
-  }
-
-  return crypto
-    .createHash("sha256")
-    .update(`${normalizedUserId}|${normalizedFeature}|${ACTIVATION_PEPPER}`)
-    .digest("hex");
-}
-
 function buildActivationURL(userId, feature) {
   const normalizedUserId = sanitizeText(userId);
   const normalizedFeature = normalizeFeatureKey(feature);
-  const token = buildActivationToken(normalizedUserId, normalizedFeature);
   const matchingUser = loadUsers().find((entry) => entry.id === normalizedUserId);
-  const query = new URLSearchParams({
-    userId: normalizedUserId,
-    appUuid: matchingUser?.appUuid || normalizedUserId,
-    feature: normalizedFeature,
-    token
-  });
+  const query = new URLSearchParams();
+
+  if (normalizedUserId) {
+    query.set("userId", normalizedUserId);
+  }
+
+  if (matchingUser?.appUuid || normalizedUserId) {
+    query.set("appUuid", matchingUser?.appUuid || normalizedUserId);
+  }
+
+  if (normalizedFeature) {
+    query.set("feature", normalizedFeature);
+  }
+
   return `${ACTIVATION_URL_SCHEME}?${query.toString()}`;
 }
 
@@ -623,6 +617,53 @@ function requireAuth(request, response, next) {
 
   request.currentUser = user;
   next();
+}
+
+function requireTokenAuth(request, response, next) {
+  const header = String(request.headers.authorization || "");
+  const token = header.startsWith("Bearer ") ? header.slice(7).trim() : "";
+  
+  if (!token) {
+    response.status(401).json({ error: "API token required. Include 'Authorization: Bearer YOUR_TOKEN' header." });
+    return;
+  }
+
+  const users = loadUsers();
+  const user = users.find((user) => user.apiToken === token);
+  
+  if (!user) {
+    response.status(401).json({ error: "Invalid API token." });
+    return;
+  }
+
+  request.currentUser = user;
+  next();
+}
+
+function requireAuthOrToken(request, response, next) {
+  // Try session auth first
+  const sessionUser = getSessionUser(request);
+  if (sessionUser) {
+    request.currentUser = sessionUser;
+    next();
+    return;
+  }
+
+  // Try token auth
+  const header = String(request.headers.authorization || "");
+  const token = header.startsWith("Bearer ") ? header.slice(7).trim() : "";
+  
+  if (token) {
+    const users = loadUsers();
+    const tokenUser = users.find((user) => user.apiToken === token);
+    if (tokenUser) {
+      request.currentUser = tokenUser;
+      next();
+      return;
+    }
+  }
+
+  response.status(401).json({ error: "Authentication required. Sign in or provide a valid API token." });
 }
 
 function requireBotAuth(request, response, next) {
@@ -693,6 +734,10 @@ app.get("/api/auth/me", (request, response) => {
   response.json({ user: user ? publicUser(user) : null });
 });
 
+app.get("/dashboard", requireAuth, (request, response) => {
+  response.sendFile(path.join(__dirname, "dashboard.html"));
+});
+
 app.post("/api/app-installations/resolve", (request, response) => {
   const machineIdentifier = normalizeMachineIdentifier(request.body.machineIdentifier);
   if (!machineIdentifier) {
@@ -726,7 +771,7 @@ app.post("/api/app-installations/resolve", (request, response) => {
     return;
   }
 
-  const appUuid = nextAvailableAppUuid(request.body.appUuid, installations, machineIdentifier);
+  const appUuid = nextAvailableAppUuid(installations, machineIdentifier);
   const installation = normalizeAppInstallationRecord({
     id: crypto.randomUUID(),
     appUuid,
@@ -767,6 +812,7 @@ app.post("/api/auth/signup", (request, response) => {
     displayName,
     email,
     passwordHash: bcrypt.hashSync(password, 10),
+    apiToken: randomSecret(32),
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     role: "user",
@@ -839,6 +885,28 @@ app.post("/api/auth/signout", (request, response) => {
   response.json({ ok: true });
 });
 
+app.post("/api/auth/generate-token", requireAuth, (request, response) => {
+  const users = loadUsers();
+  const userIndex = users.findIndex((user) => user.id === request.currentUser.id);
+  
+  if (userIndex === -1) {
+    response.status(404).json({ error: "User not found." });
+    return;
+  }
+
+  // Generate new API token
+  const newToken = randomSecret(32);
+  users[userIndex].apiToken = newToken;
+  users[userIndex].updatedAt = new Date().toISOString();
+  
+  saveUsers(users);
+  
+  response.json({ 
+    apiToken: newToken,
+    message: "New API token generated. Copy this token now - it won't be shown again for security."
+  });
+});
+
 app.post("/api/auth/app-uuid", requireAuth, (request, response) => {
   const appUuid = sanitizeText(request.body.appUuid).toLowerCase();
   if (!appUuid) {
@@ -861,6 +929,37 @@ app.post("/api/auth/app-uuid", requireAuth, (request, response) => {
 
   const nextUser = persistUser(users, index, { appUuid });
   response.json({ user: publicUser(nextUser) });
+});
+
+function unlinkCurrentWebsiteUser(request, response) {
+  const requestedWebsiteUserId = sanitizeText(request.body.websiteUserId || request.query.websiteUserId);
+  if (!requestedWebsiteUserId) {
+    response.status(400).json({ error: "websiteUserId is required." });
+    return;
+  }
+
+  if (requestedWebsiteUserId !== request.currentUser.id) {
+    response.status(403).json({ error: "websiteUserId does not match current user." });
+    return;
+  }
+
+  const users = loadUsers();
+  const index = users.findIndex((entry) => entry.id === request.currentUser.id);
+  if (index === -1) {
+    response.status(404).json({ error: "MacClipper user not found." });
+    return;
+  }
+
+  const nextUser = persistUser(users, index, { appUuid: request.currentUser.id });
+  response.status(200).json({ user: publicUser(nextUser) });
+}
+
+app.delete("/api/app-link", requireAuth, (request, response) => {
+  unlinkCurrentWebsiteUser(request, response);
+});
+
+app.post("/api/app-link/unlink", requireAuth, (request, response) => {
+  unlinkCurrentWebsiteUser(request, response);
 });
 
 app.get("/api/entitlements/by-user-id", (request, response) => {
@@ -914,6 +1013,7 @@ app.get("/api/entitlements/activation-link", requireAuth, (request, response) =>
 
   response.json({
     user: publicUser(request.currentUser),
+    message: "Open this in MacClipper to refresh this install's entitlements.",
     activationURL: buildActivationURL(request.currentUser.id, feature)
   });
 });
@@ -934,6 +1034,7 @@ app.post("/api/purchases/4k-pro/complete", requireAuth, (request, response) => {
 
   response.json({
     user: publicUser(nextUser),
+    message: "Purchase recorded. Open MacClipper so it can refresh this install's entitlements.",
     activationURL: buildActivationURL(nextUser.id, "4k-pro")
   });
 });
@@ -1095,7 +1196,7 @@ app.get("/api/videos/:id", (request, response) => {
   response.json({ video: publicVideo(video) });
 });
 
-app.post("/api/videos", requireAuth, upload.single("video"), (request, response) => {
+app.post("/api/videos", requireAuthOrToken, upload.single("video"), (request, response) => {
   if (!request.file) {
     response.status(400).json({ error: "Pick a video file first." });
     return;
@@ -1162,6 +1263,36 @@ app.use((error, _request, response, _next) => {
   }
 
   response.status(500).json({ error: "Unexpected server error." });
+});
+
+
+// In-memory store for pending Discord link codes (for demo; use persistent store for production)
+const pendingDiscordLinks = new Map();
+
+// POST /api/bot/discord-link/start
+// Body: { discordUserId, discordUsername }
+// Returns: { linkURL, code }
+app.post("/api/bot/discord-link/start", requireBotAuth, (request, response) => {
+  const discordUserId = sanitizeText(request.body.discordUserId);
+  const discordUsername = sanitizeText(request.body.discordUsername);
+  if (!discordUserId || !discordUsername) {
+    response.status(400).json({ error: "discordUserId and discordUsername are required." });
+    return;
+  }
+
+  // Generate a unique code for linking
+  const code = randomSecret(24);
+  // Store the code with Discord info (expires in 10 min)
+  pendingDiscordLinks.set(code, {
+    discordUserId,
+    discordUsername,
+    createdAt: Date.now()
+  });
+  setTimeout(() => pendingDiscordLinks.delete(code), 10 * 60 * 1000); // auto-expire
+
+  // Construct the link URL for the website to handle
+  const linkURL = `https://macclipper.com/discord-link/verify?code=${encodeURIComponent(code)}`;
+  response.json({ linkURL, code });
 });
 
 const port = Number(config.PORT || 4173);

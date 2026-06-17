@@ -1,0 +1,45 @@
+{
+  "name": "macclipper-website",
+  "version": "1.0.0",
+  "description": "MacClipper website with Google sign-in and clip management",
+  "homepage": "/",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "react-scripts start",
+    "build": "react-scripts build",
+    "predeploy": "npm run build",
+    "deploy": "gh-pages -d build -r https://github.com/Userbro20/macclipper-site.git -u \"Meteorite <meteoritecontentman@gmail.com>\"",
+    "test": "react-scripts test",
+    "eject": "react-scripts eject"
+  },
+  "dependencies": {
+    "@google-cloud/local-auth": "^2.1.0",
+    "@supabase/supabase-js": "^2.103.2",
+    "axios": "^1.3.0",
+    "firebase": "^9.17.0",
+    "framer-motion": "^11.18.2",
+    "lucide-react": "^0.475.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-router-dom": "^6.8.0",
+    "react-scripts": "5.0.1"
+  },
+  "devDependencies": {
+    "autoprefixer": "^10.4.21",
+    "gh-pages": "^6.3.0",
+    "postcss": "^8.5.3",
+    "tailwindcss": "^3.4.17"
+  },
+  "browserslist": {
+    "production": [
+      ">0.2%",
+      "not dead",
+      "not op_mini all"
+    ],
+    "development": [
+      "last 1 chrome version",
+      "last 1 firefox version",
+      "last 1 safari version"
+    ]
+  }
+}

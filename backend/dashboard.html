@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MacClipper Dashboard</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .section {
+            margin-bottom: 30px;
+            padding: 20px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+        }
+        .section h2 {
+            margin-top: 0;
+            color: #555;
+        }
+        .token-display {
+            background: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+            padding: 15px;
+            margin: 10px 0;
+            font-family: monospace;
+            word-break: break-all;
+            display: none;
+        }
+        .btn {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        .btn:hover {
+            background: #0056b3;
+        }
+        .btn:disabled {
+            background: #6c757d;
+            cursor: not-allowed;
+        }
+        .status {
+            margin-top: 10px;
+            padding: 10px;
+            border-radius: 4px;
+            display: none;
+        }
+        .status.success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        .status.error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        .loading {
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            border: 2px solid #f3f3f3;
+            border-top: 2px solid #3498db;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-left: 10px;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>MacClipper Dashboard</h1>
+
+        <div class="section">
+            <h2>🔑 API Token for MacClipper App</h2>
+            <p>Generate an API token to allow your MacClipper desktop app to upload clips directly to your cloud storage.</p>
+
+            <button id="generateTokenBtn" class="btn">Generate API Token</button>
+            <div id="tokenDisplay" class="token-display"></div>
+
+            <div id="status" class="status"></div>
+        </div>
+
+        <div class="section">
+            <h2>📹 Your Uploaded Clips</h2>
+            <p>View and manage your uploaded video clips:</p>
+            <button id="loadClipsBtn" class="btn">Load My Clips</button>
+            <div id="clipsList"></div>
+        </div>
+
+        <div class="section">
+            <h2>ℹ️ Setup Instructions</h2>
+            <ol>
+                <li>Click "Generate API Token" above</li>
+                <li>Copy the token that appears (it will only be shown once)</li>
+                <li>Open MacClipper on your Mac</li>
+                <li>Go to Settings → Share + Storage → API Token</li>
+                <li>Paste your token and save</li>
+                <li>Click the cloud icon on any clip to upload it</li>
+            </ol>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = window.location.origin;
+
+        // Check if user is logged in
+        fetch(`${API_BASE}/api/auth/me`, {
+            credentials: 'include'
+        })
+        .then(response => {
+            if (!response.ok) {
+                window.location.href = '/auth.html';
+                return;
+            }
+            return response.json();
+        })
+        .then(data => {
+            if (data && data.user) {
+                console.log('Logged in as:', data.user.displayName);
+            }
+        })
+        .catch(() => {
+            window.location.href = '/auth.html';
+        });
+
+        // Generate API token
+        document.getElementById('generateTokenBtn').addEventListener('click', async () => {
+            const btn = document.getElementById('generateTokenBtn');
+            const status = document.getElementById('status');
+            const tokenDisplay = document.getElementById('tokenDisplay');
+
+            btn.disabled = true;
+            btn.innerHTML = 'Generating... <div class="loading"></div>';
+            status.style.display = 'none';
+            tokenDisplay.style.display = 'none';
+
+            try {
+                const response = await fetch(`${API_BASE}/api/auth/generate-token`, {
+                    method: 'POST',
+                    credentials: 'include'
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    tokenDisplay.textContent = data.apiToken;
+                    tokenDisplay.style.display = 'block';
+                    status.textContent = data.message;
+                    status.className = 'status success';
+                    status.style.display = 'block';
+
+                    // Auto-hide token after 30 seconds
+                    setTimeout(() => {
+                        tokenDisplay.style.display = 'none';
+                        tokenDisplay.textContent = '';
+                    }, 30000);
+                } else {
+                    throw new Error(data.error || 'Failed to generate token');
+                }
+            } catch (error) {
+                status.textContent = error.message;
+                status.className = 'status error';
+                status.style.display = 'block';
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Generate API Token';
+            }
+        });
+
+        // Load clips
+        document.getElementById('loadClipsBtn').addEventListener('click', async () => {
+            const btn = document.getElementById('loadClipsBtn');
+            const clipsList = document.getElementById('clipsList');
+
+            btn.disabled = true;
+            btn.textContent = 'Loading...';
+
+            try {
+                const response = await fetch(`${API_BASE}/api/videos`, {
+                    credentials: 'include'
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    if (data.videos && data.videos.length > 0) {
+                        clipsList.innerHTML = '<h3>Your Clips:</h3>' +
+                            data.videos.map(video => `
+                                <div style="border: 1px solid #ddd; padding: 10px; margin: 10px 0; border-radius: 4px;">
+                                    <h4>${video.title}</h4>
+                                    <p><strong>Game:</strong> ${video.game}</p>
+                                    <p><strong>Uploaded:</strong> ${new Date(video.uploadedAt).toLocaleString()}</p>
+                                    <p><strong>Size:</strong> ${(video.fileSize / 1024 / 1024).toFixed(2)} MB</p>
+                                    <video controls style="max-width: 100%; max-height: 300px;">
+                                        <source src="${API_BASE}${video.videoUrl}" type="${video.fileType}">
+                                        Your browser does not support the video tag.
+                                    </video>
+                                </div>
+                            `).join('');
+                    } else {
+                        clipsList.innerHTML = '<p>No clips uploaded yet.</p>';
+                    }
+                } else {
+                    throw new Error(data.error || 'Failed to load clips');
+                }
+            } catch (error) {
+                clipsList.innerHTML = `<p style="color: red;">Error: ${error.message}</p>`;
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Load My Clips';
+            }
+        });
+    </script>
+</body>
+</html>

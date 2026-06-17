@@ -21,8 +21,10 @@ final class ClipSharePanelManager {
     func show(
         clipURL: URL,
         discordConnected: Bool,
+        onCloud: @escaping () -> Void,
         onDiscordChannel: @escaping () -> Void,
-        onDiscordDM: @escaping () -> Void
+        onDiscordDM: @escaping () -> Void,
+        onOther: @escaping () -> Void
     ) {
         let panel = ensurePanel()
         let apps = availableApps(for: clipURL)
@@ -31,6 +33,10 @@ final class ClipSharePanelManager {
             rootView: ClipSharePanelView(
                 discordConnected: discordConnected,
                 apps: apps,
+                onCloud: { [weak self] in
+                    onCloud()
+                    self?.close()
+                },
                 onDiscordChannel: { [weak self] in
                     onDiscordChannel()
                     self?.close()
@@ -44,6 +50,7 @@ final class ClipSharePanelManager {
                     self?.close()
                 },
                 onOther: { [weak self] in
+                    onOther()
                     self?.showSystemSharePicker(for: clipURL, from: panel)
                 },
                 onClose: { [weak self] in
@@ -53,7 +60,7 @@ final class ClipSharePanelManager {
         )
         contentView.translatesAutoresizingMaskIntoConstraints = false
 
-        let container = NSView(frame: NSRect(x: 0, y: 0, width: 420, height: 300))
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 420, height: 380))
         container.wantsLayer = true
         container.addSubview(contentView)
 
@@ -65,7 +72,7 @@ final class ClipSharePanelManager {
         ])
 
         panel.contentView = container
-        panel.setContentSize(NSSize(width: 420, height: 300))
+    panel.setContentSize(NSSize(width: 420, height: 380))
         position(panel)
         panel.makeKeyAndOrderFront(nil)
         NSApplication.shared.activate(ignoringOtherApps: true)
@@ -77,7 +84,7 @@ final class ClipSharePanelManager {
         }
 
         let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 420, height: 300),
+            contentRect: NSRect(x: 0, y: 0, width: 420, height: 380),
             styleMask: [.titled, .closable, .fullSizeContentView],
             backing: .buffered,
             defer: false
@@ -156,6 +163,7 @@ final class ClipSharePanelManager {
 private struct ClipSharePanelView: View {
     let discordConnected: Bool
     let apps: [ShareTargetApp]
+    let onCloud: () -> Void
     let onDiscordChannel: () -> Void
     let onDiscordDM: () -> Void
     let onOpenApp: (ShareTargetApp) -> Void
@@ -190,24 +198,30 @@ private struct ClipSharePanelView: View {
                 }
 
                 MacClipperSurface(cornerRadius: 20, padding: 14) {
-                    VStack(spacing: 12) {
-                        HStack(spacing: 12) {
-                            ShareChoiceTile(
-                                title: "Discord Channel",
-                                subtitle: discordConnected ? "Upload to your connected channel" : "Connect a webhook first",
-                                systemImage: "paperplane.fill",
-                                tint: MacClipperTheme.cyan,
-                                action: onDiscordChannel
-                            )
+                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
+                        ShareChoiceTile(
+                            title: "Cloud",
+                            subtitle: "Create a link instantly and copy it",
+                            systemImage: "cloud.fill",
+                            tint: MacClipperTheme.cyan,
+                            action: onCloud
+                        )
 
-                            ShareChoiceTile(
-                                title: "Discord DM",
-                                subtitle: discordConnected ? "Upload, copy link, open Discord" : "Connect a webhook first",
-                                systemImage: "bubble.left.and.bubble.right.fill",
-                                tint: MacClipperTheme.success,
-                                action: onDiscordDM
-                            )
-                        }
+                        ShareChoiceTile(
+                            title: "Post Online",
+                            subtitle: discordConnected ? "Send straight to your locked public feed" : "This build is missing its public post target",
+                            systemImage: "paperplane.fill",
+                            tint: MacClipperTheme.cyan,
+                            action: onDiscordChannel
+                        )
+
+                        ShareChoiceTile(
+                            title: "Post + Open Discord",
+                            subtitle: discordConnected ? "Post it, copy the link, then jump into Discord" : "This build is missing its public post target",
+                            systemImage: "bubble.left.and.bubble.right.fill",
+                            tint: MacClipperTheme.success,
+                            action: onDiscordDM
+                        )
 
                         ShareChoiceTile(
                             title: "Other",
@@ -238,7 +252,7 @@ private struct ClipSharePanelView: View {
             }
             .padding(18)
         }
-        .frame(width: 420, height: 300)
+        .frame(width: 420, height: 380)
     }
 }
 

@@ -6,8 +6,11 @@ APP_NAME="MacClipper"
 VOL_NAME="MacClipper Installer"
 DIST_DIR="$ROOT/dist"
 BACKGROUND_NAME="dmg-background.png"
-TARGET_ARCHS_STRING="${MACCLIPPER_DMG_ARCHS:-arm64 x86_64}"
+TARGET_ARCHS_STRING="${MACCLIPPER_DMG_ARCHS:-arm64}"
 TARGET_ARCHS=(${=TARGET_ARCHS_STRING})
+SKIP_PACKAGE_APP="${MACCLIPPER_SKIP_PACKAGE_APP:-0}"
+OVERRIDE_APP_PATH="${MACCLIPPER_OUTPUT_APP_PATH:-}"
+OVERRIDE_DMG_PATH="${MACCLIPPER_OUTPUT_DMG_PATH:-}"
 
 arch_label() {
   case "$1" in
@@ -36,6 +39,11 @@ validate_arch() {
 
 app_path_for_arch() {
   local arch="$1"
+  if [[ -n "$OVERRIDE_APP_PATH" && ${#TARGET_ARCHS[@]} -eq 1 ]]; then
+    echo "$OVERRIDE_APP_PATH"
+    return
+  fi
+
   if (( ${#TARGET_ARCHS[@]} == 1 )); then
     echo "$DIST_DIR/$APP_NAME.app"
     return
@@ -46,6 +54,11 @@ app_path_for_arch() {
 
 dmg_path_for_arch() {
   local arch="$1"
+  if [[ -n "$OVERRIDE_DMG_PATH" && ${#TARGET_ARCHS[@]} -eq 1 ]]; then
+    echo "$OVERRIDE_DMG_PATH"
+    return
+  fi
+
   if (( ${#TARGET_ARCHS[@]} == 1 )); then
     echo "$DIST_DIR/$APP_NAME.dmg"
     return
@@ -100,8 +113,8 @@ build_dmg_for_app() {
      set icon size of viewOptions to 128
      set text size of viewOptions to 14
      set background picture of viewOptions to file ".background:$BACKGROUND_NAME"
-     set position of item "$APP_NAME.app" of container window to {240, 300}
-     set position of item "Applications" of container window to {720, 300}
+     set position of item "$APP_NAME.app" of container window to {256, 307}
+     set position of item "Applications" of container window to {856, 307}
      update without registering applications
      delay 1
      close
@@ -112,7 +125,9 @@ build_dmg_for_app() {
 EOF
 )
 
-  osascript -e "$applescript" >/dev/null || true
+  osascript -e "$applescript" || {
+    echo "Warning: AppleScript failed for $arch DMG, continuing anyway" >&2
+  }
   sync
   sleep 2
   hdiutil detach "$device" >/dev/null
@@ -124,7 +139,6 @@ EOF
 }
 
 cd "$ROOT"
-swift "$ROOT/scripts/generate_dmg_background.swift"
 
 native_arch="$(uname -m)"
 native_app_path=""
@@ -133,12 +147,21 @@ native_dmg_path=""
 for target_arch in "${TARGET_ARCHS[@]}"; do
   validate_arch "$target_arch"
 
+  # Generate fresh background for each DMG
+  swift "$ROOT/scripts/generate_dmg_background.swift"
+
   app_path="$(app_path_for_arch "$target_arch")"
   final_dmg="$(dmg_path_for_arch "$target_arch")"
 
-  MACCLIPPER_BUILD_ARCH="$target_arch" \
-  MACCLIPPER_OUTPUT_APP_PATH="$app_path" \
-    "$ROOT/scripts/package_app.sh"
+  if [[ "$SKIP_PACKAGE_APP" != "1" ]]; then
+    MACCLIPPER_BUILD_DMG=0 \
+    MACCLIPPER_BUILD_ARCH="$target_arch" \
+    MACCLIPPER_OUTPUT_APP_PATH="$app_path" \
+      "$ROOT/scripts/package_app.sh"
+  elif [[ ! -d "$app_path" ]]; then
+    echo "App bundle not found at $app_path" >&2
+    exit 1
+  fi
 
   build_dmg_for_app "$app_path" "$target_arch" "$final_dmg"
 

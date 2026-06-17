@@ -1,10 +1,87 @@
 {
   "hosting": {
-    "public": "hosting",
+    "public": "website/build",
     "ignore": [
       "firebase.json",
       "**/.*",
       "**/node_modules/**"
+    ],
+    "redirects": [
+      {
+        "source": "/clipper-for-mac.html",
+        "destination": "/how-to-clip-on-mac",
+        "type": 301
+      },
+      {
+        "source": "/gaming-clipper-for-macbook.html",
+        "destination": "/how-to-clip-on-mac",
+        "type": 301
+      },
+      {
+        "source": "/clipping-software-for-mac.html",
+        "destination": "/how-to-clip-on-mac",
+        "type": 301
+      },
+      {
+        "source": "/how-to-screen-record-on-mac.html",
+        "destination": "/how-to-clip-on-mac",
+        "type": 301
+      },
+      {
+        "source": "/medal-for-mac.html",
+        "destination": "/how-to-clip-on-mac",
+        "type": 301
+      },
+      {
+        "source": "/compare.html",
+        "destination": "/how-to-clip-on-mac",
+        "type": 301
+      },
+      {
+        "source": "/performance.html",
+        "destination": "/how-to-clip-on-mac",
+        "type": 301
+      },
+      {
+        "source": "/clipper-for-mac",
+        "destination": "/how-to-clip-on-mac",
+        "type": 301
+      },
+      {
+        "source": "/gaming-clipper-for-macbook",
+        "destination": "/how-to-clip-on-mac",
+        "type": 301
+      },
+      {
+        "source": "/how-to-clip-on-mac",
+        "destination": "/how-to-clip-on-mac.html",
+        "type": 301
+      },
+      {
+        "source": "/how-to-screen-record-on-mac",
+        "destination": "/how-to-clip-on-mac",
+        "type": 301
+      },
+      {
+        "source": "/clipping-software-for-mac",
+        "destination": "/how-to-clip-on-mac",
+        "type": 301
+      },
+      {
+        "source": "/medal-for-mac",
+        "destination": "/how-to-clip-on-mac",
+        "type": 301
+      },
+      {
+        "source": "/compare",
+        "destination": "/how-to-clip-on-mac",
+        "type": 301
+      },
+      {
+        "source": "/performance",
+        "destination": "/how-to-clip-on-mac",
+        "type": 301
+      }
     ],
     "rewrites": [
       {
@@ -13,6 +90,10 @@
           "functionId": "api",
           "region": "us-central1"
         }
+      },
+      {
+        "source": "**",
+        "destination": "/index.html"
       }
     ]
   },
@@ -39,7 +120,7 @@
       "port": 8080
     },
     "hosting": {
-      "port": 5000
+      "port": 5005
     },
     "ui": {
       "enabled": true,

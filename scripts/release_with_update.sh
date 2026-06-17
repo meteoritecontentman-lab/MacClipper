@@ -5,7 +5,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 APPCAST_XML="$ROOT/appcast.xml"
 LEGACY_FEED_JSON="$ROOT/update-feed.json"
 PLIST_PATH="$ROOT/AppResources/Info.plist"
-ARCHIVE_PATH="$ROOT/dist/MacClipper.zip"
+ARCHIVE_PATH="$ROOT/dist/MacClipper.dmg"
 RELEASES_URL="https://github.com/Userbro20/macclip-auto-update/releases"
 DEFAULT_NOTES="Sparkle-based MacClipper release."
 
@@ -58,11 +58,13 @@ PY
 
 cd "$ROOT"
 
-./scripts/package_app.sh
+rm -rf "$ROOT/dist"
+mkdir -p "$ROOT/dist"
+./scripts/build_dmg.sh
 
 SHORT_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$PLIST_PATH")"
 BUILD_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$PLIST_PATH")"
-DOWNLOAD_URL="${1:-https://github.com/Userbro20/macclip-auto-update/releases/download/v$SHORT_VERSION/MacClipper.zip}"
+DOWNLOAD_URL="${1:-https://github.com/Userbro20/macclip-auto-update/releases/download/v$SHORT_VERSION/MacClipper.dmg}"
 RELEASE_NOTES="$(read_release_notes)"
 SPARKLE_SIGN_UPDATE="$(find_sparkle_tool sign_update)"
 
@@ -70,9 +72,6 @@ if [[ "$DOWNLOAD_URL" != https://* ]]; then
         echo "Release download URL must use HTTPS." >&2
         exit 1
 fi
-
-rm -f "$ARCHIVE_PATH"
-/usr/bin/ditto -c -k --sequesterRsrc --keepParent "$ROOT/dist/MacClipper.app" "$ARCHIVE_PATH"
 
 ARCHIVE_SIZE="$(stat -f%z "$ARCHIVE_PATH")"
 ARCHIVE_SHA256="$(shasum -a 256 "$ARCHIVE_PATH" | awk '{print $1}')"
@@ -125,6 +124,7 @@ appcast = f'''<?xml version="1.0" encoding="utf-8"?>
                         <pubDate>{html.escape(pub_date)}</pubDate>
                         <description><![CDATA[{notes_html}]]></description>
                         <enclosure url="{html.escape(download_url, quote=True)}" {signature_fragment} type="application/octet-stream" />
+                        <enclosure url="{html.escape(download_url, quote=True)}" {signature_fragment} type="application/x-apple-diskimage" />
                 </item>
         </channel>
 </rss>
@@ -153,5 +153,5 @@ echo "Legacy migration feed updated: $LEGACY_FEED_JSON"
 echo "Archive SHA-256: $ARCHIVE_SHA256"
 
 if [[ "$HTTP_STATUS" != "200" ]]; then
-        echo "Warning: $DOWNLOAD_URL returned HTTP $HTTP_STATUS. Upload dist/MacClipper.zip there before pushing appcast.xml and update-feed.json."
+        echo "Warning: $DOWNLOAD_URL returned HTTP $HTTP_STATUS. Upload dist/MacClipper.dmg there before pushing appcast.xml and update-feed.json."
 fi

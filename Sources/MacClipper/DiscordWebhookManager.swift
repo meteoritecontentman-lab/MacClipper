@@ -11,13 +11,13 @@ enum DiscordWebhookError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .invalidWebhookURL:
-            return "Enter a valid Discord webhook URL first."
+            return "Public posting is not configured in this build."
         case .unsupportedWebhookHost:
-            return "Discord uploads require a discord.com webhook URL."
+            return "The locked public post target is invalid."
         case .missingClipFile:
-            return "The clip file could not be found for Discord upload."
+            return "The clip file could not be found for public posting."
         case .clipTooLarge:
-            return "Discord rejected the clip size, and MacClipper could not shrink it enough for upload."
+            return "The post target rejected the clip size, and MacClipper could not shrink it enough to send."
         case .uploadFailed(let message):
             return message
         }
@@ -47,7 +47,7 @@ struct DiscordWebhookManager {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONEncoder().encode([
-            "content": "MacClipper test message: Discord channel connection is working."
+            "content": "MacClipper test message: public clip posting is working."
         ])
 
         let (data, response) = try await URLSession.shared.data(for: request)
@@ -127,7 +127,7 @@ struct DiscordWebhookManager {
         }
 
         if let lastError {
-            throw DiscordWebhookError.uploadFailed("MacClipper could not prepare a Discord upload: \(lastError.localizedDescription)")
+            throw DiscordWebhookError.uploadFailed("MacClipper could not prepare this clip for public posting: \(lastError.localizedDescription)")
         }
 
         throw DiscordWebhookError.clipTooLarge
@@ -135,11 +135,11 @@ struct DiscordWebhookManager {
 
     private static func exportCompressedAsset(asset: AVURLAsset, presetName: String, outputURL: URL) async throws {
         guard let exporter = AVAssetExportSession(asset: asset, presetName: presetName) else {
-            throw DiscordWebhookError.uploadFailed("MacClipper could not create a Discord export session.")
+            throw DiscordWebhookError.uploadFailed("MacClipper could not create a public-post export session.")
         }
 
         guard exporter.supportedFileTypes.contains(.mp4) else {
-            throw DiscordWebhookError.uploadFailed("MacClipper could not create a Discord-friendly MP4 for this clip.")
+            throw DiscordWebhookError.uploadFailed("MacClipper could not create an upload-friendly MP4 for this clip.")
         }
 
         exporter.shouldOptimizeForNetworkUse = true
@@ -202,7 +202,7 @@ struct DiscordWebhookManager {
 
     private static func validateDiscordResponse(data: Data, response: URLResponse) throws {
         guard let httpResponse = response as? HTTPURLResponse else {
-            throw DiscordWebhookError.uploadFailed("Discord did not return a valid response.")
+            throw DiscordWebhookError.uploadFailed("The public post target did not return a valid response.")
         }
 
         guard (200 ..< 300).contains(httpResponse.statusCode) else {
@@ -211,8 +211,8 @@ struct DiscordWebhookManager {
                 throw DiscordWebhookError.clipTooLarge
             }
             let message = responseText?.isEmpty == false
-                ? "Discord upload failed: \(responseText!)"
-                : "Discord upload failed with status \(httpResponse.statusCode)."
+                ? "Public post failed: \(responseText!)"
+                : "Public post failed with status \(httpResponse.statusCode)."
             throw DiscordWebhookError.uploadFailed(message)
         }
     }

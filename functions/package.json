@@ -13,13 +13,20 @@
     "lint": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@types/multer": "^2.1.0",
+    "busboy": "^1.6.0",
     "express": "^4.21.2",
     "firebase-admin": "^12.1.1",
     "firebase-functions": "^5.1.1",
+    "multer": "^2.1.1",
+    "nodemailer": "^6.10.1",
+    "stripe": "^22.1.0",
     "zod": "^3.23.8"
   },
   "devDependencies": {
+    "@types/busboy": "^1.5.4",
     "@types/express": "^5.0.1",
+    "@types/nodemailer": "^8.0.0",
     "typescript": "^5.6.3"
   }
 }

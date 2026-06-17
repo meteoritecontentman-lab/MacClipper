@@ -7,37 +7,58 @@ struct SettingsView: View {
     private var clipDurationBinding: Binding<Double> {
         Binding(
             get: { model.clipDuration },
-            set: {
-                model.clipDuration = $0
+            set: { newValue in
+                model.clipDuration = newValue
                 model.savePreferences()
             }
         )
     }
 
     private var notificationsBinding: Binding<Bool> {
-        binding(for: \.enableGameNotifications)
+        Binding(
+            get: { model.enableGameNotifications },
+            set: { newValue in
+                model.enableGameNotifications = newValue
+                model.savePreferences()
+            }
+        )
     }
 
     private var microphoneBinding: Binding<Bool> {
-        binding(for: \.includeMicrophone)
+        Binding(
+            get: { model.includeMicrophone },
+            set: { newValue in
+                model.includeMicrophone = newValue
+                model.savePreferences()
+            }
+        )
     }
 
     private var microphoneDeviceBinding: Binding<String> {
         Binding(
             get: { model.selectedMicrophoneID },
-            set: { model.setSelectedMicrophoneID($0) }
+            set: { newValue in
+                model.setSelectedMicrophoneID(newValue)
+                model.savePreferences()
+            }
         )
     }
 
     private var systemAudioBinding: Binding<Bool> {
-        binding(for: \.captureSystemAudio)
+        Binding(
+            get: { model.captureSystemAudio },
+            set: { newValue in
+                model.captureSystemAudio = newValue
+                model.savePreferences()
+            }
+        )
     }
 
     private var systemAudioLevelBinding: Binding<Double> {
         Binding(
             get: { model.systemAudioLevel * 100 },
-            set: {
-                model.systemAudioLevel = $0 / 100
+            set: { newValue in
+                model.systemAudioLevel = newValue / 100
                 model.savePreferences()
             }
         )
@@ -46,15 +67,21 @@ struct SettingsView: View {
     private var microphoneAudioLevelBinding: Binding<Double> {
         Binding(
             get: { model.microphoneAudioLevel * 100 },
-            set: {
-                model.microphoneAudioLevel = $0 / 100
+            set: { newValue in
+                model.microphoneAudioLevel = newValue / 100
                 model.savePreferences()
             }
         )
     }
 
     private var showCursorBinding: Binding<Bool> {
-        binding(for: \.showCursor)
+        Binding(
+            get: { model.showCursor },
+            set: { newValue in
+                model.showCursor = newValue
+                model.savePreferences()
+            }
+        )
     }
 
     private var useCommandBinding: Binding<Bool> {
@@ -114,6 +141,16 @@ struct SettingsView: View {
         )
     }
 
+    private var base44TokenBinding: Binding<String> {
+        Binding(
+            get: { model.base44Token },
+            set: {
+                model.base44Token = $0
+                model.savePreferences()
+            }
+        )
+    }
+
     private var shortcutKeyBinding: Binding<String> {
         Binding(
             get: { model.shortcutKey },
@@ -137,7 +174,6 @@ struct SettingsView: View {
                             SlateStatusBadge(title: model.isRecording ? "Live Capture" : "Recorder Idle", tint: model.isRecording ? SlateTheme.success : SlateTheme.warning)
                             SlateStatusBadge(title: model.videoQualityPreset.displayName, tint: SlateTheme.accent)
                             SlateStatusBadge(title: "UUID \(model.appUUIDShortDisplayText)", tint: SlateTheme.accent)
-                            SlateStatusBadge(title: model.websiteUserIDDisplayText, tint: model.websiteUserID.isEmpty ? SlateTheme.warning : SlateTheme.success)
                             SlateStatusBadge(title: "\(Int(model.clipDuration))s", tint: SlateTheme.warning)
                             SlateStatusBadge(title: model.clipCountText, tint: SlateTheme.accent)
                         }
@@ -234,29 +270,11 @@ struct SettingsView: View {
                             .buttonStyle(.plain)
                         }
 
-                        SlateRow(
-                            title: "Website User ID",
-                            subtitle: model.websiteUserIDSubtitle,
-                            systemImage: "person.text.rectangle",
-                            isSelected: !model.websiteUserID.isEmpty,
-                            tint: model.websiteUserID.isEmpty ? SlateTheme.warning : SlateTheme.success
-                        ) {
-                            Button {
-                                model.copyWebsiteUserID()
-                            } label: {
-                                SlateCapsuleButtonLabel(
-                                    title: model.websiteUserID.isEmpty ? "Waiting" : "Copy ID",
-                                    systemImage: model.websiteUserID.isEmpty ? "hourglass" : "doc.on.doc",
-                                    tint: SlateTheme.textPrimary,
-                                    highlighted: !model.websiteUserID.isEmpty
-                                )
-                            }
-                            .buttonStyle(.plain)
-                            .disabled(model.websiteUserID.isEmpty)
-                        }
+                        // Website User ID row removed
+
 
                         SlateRow(
-                            title: "4K Pro",
+                            title: "MacClipper Pro",
                             subtitle: model.fourKProStatusText,
                             systemImage: model.hasUnlocked4KPro ? "checkmark.seal.fill" : "lock.fill",
                             isSelected: model.hasUnlocked4KPro,
@@ -265,14 +283,30 @@ struct SettingsView: View {
                             Button {
                                 model.open4KPurchasePage()
                             } label: {
+
+                        if model.isDeveloperBuild {
+                            DeveloperSettingsPanel(density: .regular)
+                        }
                                 SlateCapsuleButtonLabel(
-                                    title: model.hasUnlocked4KPro ? "Open Portal" : "Buy 4K",
+                                    title: model.hasUnlocked4KPro ? "Open Portal" : "Buy Pro",
                                     systemImage: model.hasUnlocked4KPro ? "arrow.up.forward.app" : "cart.fill",
                                     tint: SlateTheme.textPrimary,
                                     highlighted: true
                                 )
                             }
                             .buttonStyle(.plain)
+                        }
+
+                        SlatePanelDivider()
+                        SlateSectionCaption(title: "Editor")
+                        SlateRow(
+                            title: "MacClipper Editor",
+                            subtitle: "MacClipper Editor opens in its own desktop window.",
+                            systemImage: "scissors",
+                            isSelected: model.hasUnlocked4KPro,
+                            tint: model.hasUnlocked4KPro ? SlateTheme.accent : SlateTheme.warning
+                        ) {
+                            SlateStatusBadge(title: model.hasUnlocked4KPro ? "Ready" : "PRO", tint: model.hasUnlocked4KPro ? SlateTheme.accent : SlateTheme.warning)
                         }
 
                         SlateRow(
@@ -374,8 +408,13 @@ struct SettingsView: View {
                             .frame(width: 280)
                         }
 
+                        SlateSectionCaption(title: "Voice Commands")
+
+                        VoiceCommandSetupCard(density: .regular)
+                            .environmentObject(model)
+
                         SlateRow(
-                            title: "Cursor",
+                            title: "Pro",
                             subtitle: model.showCursor ? "Mouse pointer will appear in clips." : "Cursor is hidden from clips.",
                             systemImage: "cursorarrow",
                             isSelected: model.showCursor,
@@ -385,11 +424,11 @@ struct SettingsView: View {
                         }
 
                         SlateRow(
-                            title: "Notifications Overlay",
-                            subtitle: model.enableGameNotifications ? "Clip start and finish toasts are enabled." : "Overlay notifications are muted.",
+                            title: "Game Notifications",
+                            subtitle: model.enableGameNotifications ? "In-game notifications are enabled." : "In-game notifications are disabled.",
                             systemImage: "bell.badge.fill",
                             isSelected: model.enableGameNotifications,
-                            tint: SlateTheme.warning
+                            tint: SlateTheme.accent
                         ) {
                             SlateToggleButton(isOn: notificationsBinding)
                         }
@@ -398,19 +437,19 @@ struct SettingsView: View {
                         SlateSectionCaption(title: "Share + Storage")
 
                         SlateRow(
-                            title: "Discord Channel",
-                            subtitle: "This build stays locked to one webhook so uploads always land in the same channel.",
+                            title: "Public Posting",
+                            subtitle: "This build stays locked to one online feed so every clip lands in the right place.",
                             systemImage: "paperplane.fill",
                             isSelected: model.hasDiscordWebhookConfigured,
                             tint: SlateTheme.accent
                         ) {
                             HStack(spacing: 8) {
-                                SlateStatusBadge(title: "Webhook Locked", tint: SlateTheme.success)
+                                SlateStatusBadge(title: "Feed Locked", tint: SlateTheme.success)
 
                                 Button {
                                     model.testDiscordWebhook()
                                 } label: {
-                                    SlateCapsuleButtonLabel(title: "Test Channel", systemImage: "arrow.triangle.2.circlepath")
+                                    SlateCapsuleButtonLabel(title: "Test Posting", systemImage: "arrow.triangle.2.circlepath")
                                 }
                                 .buttonStyle(.plain)
                             }
@@ -458,6 +497,21 @@ struct SettingsView: View {
                         SlateSectionCaption(title: "Maintenance")
 
                         SlateRow(
+                            title: "Clear Cache",
+                            subtitle: "Remove temporary buffer files and reset cloud upload tracking.",
+                            systemImage: "trash.fill",
+                            isSelected: false,
+                            tint: SlateTheme.warning
+                        ) {
+                            Button {
+                                model.clearAppCache()
+                            } label: {
+                                SlateCapsuleButtonLabel(title: "Clear Cache", systemImage: "trash", tint: SlateTheme.textPrimary, highlighted: true)
+                            }
+                            .buttonStyle(.plain)
+                        }
+
+                        SlateRow(
                             title: "Updates",
                             subtitle: "\(model.updater.currentVersionDescription) • \(model.updater.statusText)",
                             systemImage: "arrow.triangle.2.circlepath",
@@ -477,22 +531,22 @@ struct SettingsView: View {
 
                         SlateRow(
                             title: "Automatic Update Checks",
-                            subtitle: model.updater.automaticallyChecksForUpdates ? "MacClipper checks for updates quietly in the background." : "Updates only check when you trigger them manually.",
+                            subtitle: "Always enabled so MacClipper keeps polling for updates in the background.",
                             systemImage: "clock.badge.checkmark",
-                            isSelected: model.updater.automaticallyChecksForUpdates,
+                            isSelected: true,
                             tint: SlateTheme.success
                         ) {
-                            SlateToggleButton(isOn: automaticUpdatesBinding, onTitle: "Auto", offTitle: "Manual")
+                            SlateStatusBadge(title: "Always On", tint: SlateTheme.success)
                         }
 
                         SlateRow(
                             title: "Update On App Open",
-                            subtitle: model.updater.checksForUpdatesOnLaunch ? "MacClipper runs a background update check every time the app opens." : "App launch will not trigger an update check.",
+                            subtitle: "Every app launch checks for updates and brings the prompt to the front.",
                             systemImage: "arrow.up.circle.fill",
-                            isSelected: model.updater.checksForUpdatesOnLaunch,
+                            isSelected: true,
                             tint: SlateTheme.success
                         ) {
-                            SlateToggleButton(isOn: launchUpdateChecksBinding, onTitle: "On", offTitle: "Off")
+                            SlateStatusBadge(title: "Required", tint: SlateTheme.success)
                         }
 
                         AdvancedSettingsSection(model: model, isExpanded: $showAdvancedSettings)
@@ -537,7 +591,7 @@ struct SettingsView: View {
                     .font(.system(size: 13, weight: .bold))
                     .foregroundStyle(SlateTheme.textPrimary)
 
-                Text(model.websiteUserID.isEmpty ? "App UUID: \(model.appUUID)" : "Website User ID: \(model.websiteUserID)")
+                Text("App UUID: \(model.appUUID)")
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(SlateTheme.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -665,7 +719,7 @@ private struct AdvancedSettingsSection: View {
                         .foregroundStyle(SlateTheme.textSecondary)
                 }
             }
-            .onChange(of: isExpanded) { _, expanded in
+            .onChange(of: isExpanded) { expanded in
                 if expanded {
                     model.refreshDiagnosticsLog()
                 }

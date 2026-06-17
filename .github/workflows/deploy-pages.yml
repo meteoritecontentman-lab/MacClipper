@@ -9,4 +9,15 @@ jobs:
     steps:
       - name: Explain removal
         run: |
+          echo "Bundled website frontend was removed from this repo."name: Archived Website Workflow
+
+on:
+  workflow_dispatch:
+
+jobs:
+  notice:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Explain removal
+        run: |
           echo "Bundled website frontend was removed from this repo."

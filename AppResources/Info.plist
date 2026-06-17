@@ -15,7 +15,7 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.2.6</string>
+	<string>1.2.8</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
@@ -30,15 +30,15 @@
 		</dict>
 	</array>
 	<key>CFBundleVersion</key>
-	<string>8</string>
+	<string>10</string>
 	<key>DiscordRichPresenceButton1Label</key>
 	<string>Download MacClipper</string>
 	<key>DiscordRichPresenceButton1URL</key>
-	<string>https://github.com/Userbro20/macclip-auto-update/releases</string>
+	<string>https://discord.gg/NxSWS3yQzh</string>
 	<key>DiscordRichPresenceButton2Label</key>
 	<string>View Updates</string>
 	<key>DiscordRichPresenceButton2URL</key>
-	<string>https://github.com/Userbro20/macclip-auto-update</string>
+	<string>https://discord.gg/NxSWS3yQzh</string>
 	<key>DiscordRichPresenceClientID</key>
 	<string>1491464560073510942</string>
 	<key>DiscordRichPresenceLargeImageKey</key>
@@ -46,11 +46,17 @@
 	<key>DiscordRichPresenceLargeImageText</key>
 	<string>MacClipper</string>
 	<key>LSMinimumSystemVersion</key>
-	<string>15.0</string>
+	<string>12.3</string>
 	<key>LSUIElement</key>
-	<true/>
+	<false/>
 	<key>MacClipperAccountPortalURL</key>
-	<string>https://macclipper-ce502.web.app/buy-4k.html</string>
+	<string>https://macclipper.co/support</string>
+	<key>MacClipperAPIBaseURL</key>
+	<string>https://macclipper-ce502.web.app/api</string>
+	<key>MacClipperDeveloperMode</key>
+	<false/>
+	<key>MacClipperEnableUpdater</key>
+	<true/>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>MacClipper uses your microphone so replay clips can include your voice chat.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>

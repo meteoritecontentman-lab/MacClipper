@@ -1,14 +1,24 @@
-import Foundation
-import AppKit
-import AVFoundation
-import SwiftUI
-import UserNotifications
-import Supabase
-
-// For entitlement polling
-import Combine
-
-private struct AppInstallationRegistrationPayload: Encodable {
+// === Placeholders for missing types to unblock build ===
+struct SavedClip: Identifiable, Equatable {
+    let url: URL
+    let createdAt: Date
+    let sourceApp: ClipSourceApp?
+    var id: URL { url }
+    var fileSizeText: String {
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            return "Deleted"
+        }
+        let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
+        let size = attrs?[.size] as? Int64 ?? 0
+        let formatter = ByteCountFormatter()
+        formatter.countStyle = .file
+        return formatter.string(fromByteCount: size)
+    }
+    static func == (lhs: SavedClip, rhs: SavedClip) -> Bool {
+        lhs.url == rhs.url && lhs.createdAt == rhs.createdAt
+    }
+}
+struct AppInstallationRegistrationPayload: Codable {
     let appUuid: String
     let machineIdentifier: String
     let machineName: String
@@ -16,43 +26,99 @@ private struct AppInstallationRegistrationPayload: Encodable {
     let systemVersion: String
     let appVersion: String
     let buildVersion: String
+    let ownerLocked: Bool
 }
 
-private struct AppInstallationRegistrationSnapshot: Decodable {
-    let installation: RegisteredAppInstallation
-}
+struct AppInstallationRegistrationSnapshot: Codable {
+    let installation: Installation
 
-private struct RegisteredAppInstallation: Decodable {
-    let appUuid: String
-
-    private enum CodingKeys: String, CodingKey {
-        case appUuid
+    struct Installation: Codable {
+        let appUuid: String
     }
 }
 
-struct ClipSourceApp: Codable, Hashable {
-    let name: String
-    let bundleIdentifier: String?
-
-    var isDesktopCapture: Bool {
-        bundleIdentifier == nil && name.caseInsensitiveCompare("Desktop") == .orderedSame
-    }
-}
-
-private struct ClipMetadata: Codable {
+struct ClipMetadata: Codable {
     let sourceApp: ClipSourceApp?
     let capturedAt: Date
+    // Add more fields as needed
 }
 
-struct SavedClip: Identifiable, Hashable {
-    let url: URL
-    let createdAt: Date
-    let fileSizeText: String
-    let sourceApp: ClipSourceApp?
-    let isUploadedToCloud: Bool
+enum ClipLibraryLoader {
+    static func loadSavedClips(from folderURL: URL, uploadedClipURLs: [URL]) -> [SavedClip] {
+        let fm = FileManager.default
+        guard let enumerator = fm.enumerator(at: folderURL, includingPropertiesForKeys: [.isRegularFileKey, .contentModificationDateKey, .fileSizeKey], options: [.skipsHiddenFiles, .skipsPackageDescendants]) else {
+            return []
+        }
+        var clips: [SavedClip] = []
+        for case let fileURL as URL in enumerator {
+            guard let resourceValues = try? fileURL.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey]),
+                  resourceValues.isRegularFile == true else { continue }
+            let ext = fileURL.pathExtension.lowercased()
+            guard ext == "mp4" || ext == "mov" else { continue }
+            guard let fileSize = resourceValues.fileSize, fileSize >= 1024 else { continue }
+            let metadata = Self.loadMetadata(for: fileURL)
+            let createdAt = metadata?.capturedAt ?? (try? fileURL.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? Date()
+            clips.append(SavedClip(url: fileURL, createdAt: createdAt, sourceApp: metadata?.sourceApp))
+        }
+        clips.sort { $0.createdAt > $1.createdAt }
+        return clips
+    }
 
-    var id: URL { url }
+    static func loadMetadata(for videoURL: URL) -> ClipMetadata? {
+        let metadataURL = videoURL.deletingPathExtension().appendingPathExtension("json")
+        guard let data = try? Data(contentsOf: metadataURL) else { return nil }
+        return try? JSONDecoder().decode(ClipMetadata.self, from: data)
+    }
+
+    static func metadataURL(for url: URL) -> URL {
+        url.deletingPathExtension().appendingPathExtension("json")
+    }
+    static func makeSavedClip(from url: URL, fallbackCreatedAt: Date, sourceApp: ClipSourceApp?) -> SavedClip? {
+        return SavedClip(url: url, createdAt: fallbackCreatedAt, sourceApp: sourceApp)
+    }
 }
+// === End placeholders ===
+// Minimal placeholder for missing types to unblock build
+
+struct ClipSourceApp: Codable {
+    let name: String
+    let bundleIdentifier: String?
+    var isDesktopCapture: Bool { name == "Desktop" }
+}
+
+
+import Foundation
+import AppKit
+import AVFoundation
+import MiniCutEditor
+import SwiftUI
+import UserNotifications
+// import Supabase
+
+// Audio source selection for smarter capture
+public enum AudioSourceSelection: String, Codable, CaseIterable, Identifiable {
+    public var id: String { rawValue }
+    case microphoneOnly
+    case systemAudioOnly
+    case both
+}
+
+struct CloudShareStatusSummary: Equatable {
+    let clipPath: String
+    let clipName: String
+    let startedAt: Date
+    let state: State
+
+    enum State: Equatable {
+        case processing
+        case finishing
+        case uploaded(sharedURL: URL)
+        case failed(message: String)
+        case needsWebsiteLink
+    }
+}
+
+
 
 struct CaptureDisplayOption: Identifiable, Hashable {
     let id: String
@@ -70,7 +136,7 @@ struct MicrophoneOption: Identifiable, Hashable {
     }
 }
 
-private struct PendingClipRequest: Identifiable {
+struct PendingClipRequest: Identifiable {
     let id = UUID()
     let capturePoint: ReplayCapturePoint
     let duration: Int
@@ -79,69 +145,17 @@ private struct PendingClipRequest: Identifiable {
 }
 
 
-private enum DiscordShareMode: Equatable {
+enum DiscordShareMode: Equatable {
     case channelUpload
     case directMessageHandoff
 }
 
-private enum ClipLibraryLoader {
-    static func loadSavedClips(from folderURL: URL, uploadedClipURLs: Set<String>) -> [SavedClip] {
-        let formatter = ByteCountFormatter()
-        formatter.countStyle = .file
-
-        return ClipStorageManager.clipFileURLs(in: folderURL)
-            .compactMap { makeSavedClip(from: $0, formatter: formatter, uploadedClipURLs: uploadedClipURLs) }
-            .sorted { $0.createdAt > $1.createdAt }
-    }
-
-    static func makeSavedClip(
-        from url: URL,
-        fallbackCreatedAt: Date? = nil,
-        sourceAppOverride: ClipSourceApp? = nil,
-        uploadedClipURLs: Set<String>
-    ) -> SavedClip? {
-        let formatter = ByteCountFormatter()
-        formatter.countStyle = .file
-        return makeSavedClip(
-            from: url,
-            fallbackCreatedAt: fallbackCreatedAt,
-            sourceAppOverride: sourceAppOverride,
-            formatter: formatter,
-            uploadedClipURLs: uploadedClipURLs
-        )
-    }
-
-    static func metadataURL(for clipURL: URL) -> URL {
-        clipURL
-            .deletingPathExtension()
-            .appendingPathComponent("metadata", conformingTo: .json)
-    }
-
-    static func loadMetadata(for clipURL: URL) -> ClipMetadata? {
-        let metadataURL = metadataURL(for: clipURL)
-        guard let data = try? Data(contentsOf: metadataURL) else { return nil }
-        return try? JSONDecoder().decode(ClipMetadata.self, from: data)
-    }
-
-    private static func makeSavedClip(
-        from url: URL,
-        fallbackCreatedAt: Date? = nil,
-        sourceAppOverride: ClipSourceApp? = nil,
-        formatter: ByteCountFormatter,
-        uploadedClipURLs: Set<String>
-    ) -> SavedClip? {
-        let resourceKeys: Set<URLResourceKey> = [.creationDateKey, .contentModificationDateKey, .fileSizeKey, .isRegularFileKey]
-        guard let values = try? url.resourceValues(forKeys: resourceKeys), values.isRegularFile != false else {
-            return nil
-        }
-
-        let createdAt = values.creationDate ?? values.contentModificationDate ?? fallbackCreatedAt ?? Date.distantPast
-        let fileSizeText = formatter.string(fromByteCount: Int64(values.fileSize ?? 0))
-        let sourceApp = sourceAppOverride ?? loadMetadata(for: url)?.sourceApp
-        let isUploadedToCloud = uploadedClipURLs.contains(url.path)
-        return SavedClip(url: url, createdAt: createdAt, fileSizeText: fileSizeText, sourceApp: sourceApp, isUploadedToCloud: isUploadedToCloud)
-    }
+enum ClipEditorPresentationMode: Equatable {
+    case edit
+    case cloudShare
 }
+
+
 
 struct CaptureDeviceSettingsProfile: Codable {
     let clipDuration: Double
@@ -156,20 +170,56 @@ struct CaptureDeviceSettingsProfile: Codable {
 
 @MainActor
 final class AppModel: ObservableObject {
-    private var entitlementRefreshTimer: AnyCancellable?
+    private lazy var clipEditorWindowManager = ClipEditorWindowManager(model: self)
+    @Published private(set) var isBackendConnected: Bool = false
 
-        // MARK: - PRO Clip Editor Integration
-        @Published var editingClip: SavedClip? = nil
+    // MARK: - PRO Clip Editor Integration
+    @Published var editingClip: SavedClip? = nil
+    @Published var clipEditorPresentationMode: ClipEditorPresentationMode = .edit
+    @Published var pendingEditorCloudShareClipURL: URL?
 
-        func openClipEditor(for clip: SavedClip) {
+    func prepareClipEditorWindow(with clip: SavedClip? = nil) {
+        if let clip {
             selectedClip = clip
             clipBeingEdited = clip
-            NotificationCenter.default.post(name: Notification.Name("MacClipperOpenClipEditorInMenu"), object: nil)
             editingClip = clip
+        } else if let currentClip = clipBeingEdited ?? selectedClip ?? editingClip ?? clips.first {
+            selectedClip = currentClip
+            clipBeingEdited = currentClip
+            editingClip = currentClip
         }
-    private static let lockedDiscordWebhookURL = "https://discord.com/api/webhooks/1491091224180818160/2MutnrfaVcaH5l2GM-XRhw90z_ec0apc6TQ2Pib_5y_9hxP3Q3uPhRUhmlc4bMhfI0RW"
+
+        clipEditorWindowManager.present()
+
+        if clipEditorPresentationMode == .cloudShare {
+            statusText = "Opened the MacClipper Cloud workspace."
+        } else if hasUnlocked4KPro {
+            statusText = "Opened MacClipper Editor."
+        } else {
+            statusText = "MacClipper Editor is open. Unlock MacClipper PRO to edit clips there."
+        }
+    }
+
+    func openClipEditor(for clip: SavedClip) {
+        clipEditorPresentationMode = .edit
+        pendingEditorCloudShareClipURL = nil
+        prepareClipEditorWindow(with: clip)
+    }
+
+    func openCloudShareWorkspace(for clip: SavedClip) {
+        clipEditorPresentationMode = .cloudShare
+        pendingEditorCloudShareClipURL = clip.url
+        prepareClipEditorWindow(with: clip)
+    }
+
+    func consumePendingCloudShareRequest(for clipURL: URL) {
+        guard pendingEditorCloudShareClipURL == clipURL else { return }
+        pendingEditorCloudShareClipURL = nil
+    }
+
+    private static let lockedDiscordWebhookURL = "https://discord.com/api/webhooks/1499906346504683720/6YMO6RdiAT29M9o0GvZnIxC0Sj6ijRGozZCvT-Z5IxqlRBktZ8wOF7cV9fjRvfkEUxxQ"
     private static let captureDeviceProfilesKey = "captureDeviceProfiles"
-    private static let defaultPurchasePortalURLString = "https://macclipper-ce502.web.app/buy-4k.html"
+    private static let defaultPurchasePortalURLString = "https://macclipper.co/support"
 
     @Published var statusText: String = "Capture ready"
     @Published var isRecording: Bool = false
@@ -202,10 +252,18 @@ final class AppModel: ObservableObject {
     @Published var selectedCaptureDisplayID: String
     @Published var discordWebhookURLString: String
     @Published var base44Token: String
+    @Published var developerAccessToken: String
+    @Published var developerStatusText: String = "Sign in to the private Firebase admin API to manage installs and account status."
+    @Published var developerSearchText: String = ""
+    @Published var developerInstallations: [DeveloperInstallationSummary] = []
+    @Published var isDeveloperBusy: Bool = false
     @Published var diagnosticsLogText: String = ""
     @Published var diagnosticsLogStatusText: String = "Refresh to load the latest diagnostics log."
     @Published var isCloudConnected: Bool = false
     @Published var uploadedClipURLs: Set<String> = []
+    @Published var cloudShareStatus: CloudShareStatusSummary?
+    @Published var hasCompletedOnboarding: Bool
+    @Published var shouldShowLaunchSetup: Bool = true
 
     let updater: UpdaterManager
 
@@ -213,31 +271,40 @@ final class AppModel: ObservableObject {
     private let settingsStore: MachineSettingsStore
     private let recorder = ReplayBufferRecorder()
     private let discordWebhookManager = DiscordWebhookManager()
-    private let supabase = SupabaseClient(
-        supabaseURL: URL(string: "https://ccnuqjmqmylergzatpua.supabase.co")!,
-        supabaseKey: "sb_publishable_Rdcitk793uU54mzZFlwc-g_Gndh-orm"
-    )
+    private let clipCloudShareClient = ClipCloudShareClient()
+    // private let supabase = SupabaseClient(
+    //     supabaseURL: URL(string: "https://ccnuqjmqmylergzatpua.supabase.co")!,
+    //     supabaseKey: "sb_publishable_Rdcitk793uU54mzZFlwc-g_Gndh-orm"
+    // )
     private let hotkeyManager = HotkeyManager()
     private let voiceCommandManager = VoiceCommandManager()
     private var notificationObservers: [NSObjectProtocol] = []
     private var pendingClipRequests: [PendingClipRequest] = []
     private var activeClipRequest: PendingClipRequest?
     private var isProcessingClipQueue = false
+    private var hasResolvedInstallationIdentity = false
+    private var activeCloudUploadPaths: Set<String> = []
     private var activeDiscordUploadPaths: Set<String> = []
     private var lastWarmupNotificationAt: Date?
     private var didAttemptInitialRecording = false
     private var isRecoveringRecorder = false
     private var shouldRetryAutomaticStart = false
-    private var reloadClipsTask: Task<Void, Never>?
     private var captureDeviceProfiles: [String: CaptureDeviceSettingsProfile] = [:]
     private var microphoneCaptureSuppressed = false
     private var automaticRearmTask: Task<Void, Never>?
     private var entitlementSyncTask: Task<Void, Never>?
     private var appInstallationRegistrationTask: Task<Void, Never>?
+    private var hasShownBackendConnectionNotification = false
+    private var isEntitlementSyncInFlight = false
+    private var hasAppliedInitialEntitlementSnapshot = false
+    private var hasAcknowledgedFourKProUnlock = false
+    private var lastSeenLaunchSetupVersion: String?
+    private var customVoiceCommandPhrase: String?
+    private let defaultSaveDirectory: String
 
     init() {
         let defaults = UserDefaults.standard
-        let defaultSaveDirectory = FileManager.default.homeDirectoryForCurrentUser
+        defaultSaveDirectory = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Movies/MacClipper", isDirectory: true)
             .path
 
@@ -269,9 +336,9 @@ final class AppModel: ObservableObject {
         enableGameNotifications = persistedSettings.enableGameNotifications
         captureResolutionPreset = persistedSettings.captureResolutionPreset
         videoQualityPreset = persistedSettings.videoQualityPreset
-        appUUID = Self.resolvedAppUUID(persistedSettings.appUUID)
+        appUUID = UUID().uuidString.lowercased()
         websiteUserID = persistedSettings.websiteUserID ?? ""
-        unlockedPaidFeatures = FeatureActivationManager.normalizedFeatures(persistedSettings.unlockedPaidFeatures)
+        unlockedPaidFeatures = []
         shortcutKey = persistedSettings.shortcutKey.isEmpty ? "9" : persistedSettings.shortcutKey
         useCommand = persistedSettings.useCommand
         useShift = persistedSettings.useShift
@@ -281,7 +348,13 @@ final class AppModel: ObservableObject {
         selectedCaptureDisplayID = persistedSettings.selectedCaptureDisplayID.isEmpty ? Self.defaultCaptureDisplayID() : persistedSettings.selectedCaptureDisplayID
         discordWebhookURLString = Self.lockedDiscordWebhookURL
         base44Token = persistedSettings.base44Token ?? ""
-        isCloudConnected = !base44Token.isEmpty
+        developerAccessToken = Self.loadDeveloperAccessToken()
+        hasCompletedOnboarding = persistedSettings.hasCompletedOnboarding
+        lastSeenLaunchSetupVersion = Self.normalizedLaunchSetupVersion(persistedSettings.lastSeenLaunchSetupVersion)
+        hasAcknowledgedFourKProUnlock = persistedSettings.hasAcknowledgedFourKProUnlock ?? false
+        customVoiceCommandPhrase = persistedSettings.customVoiceCommandPhrase
+        shouldShowLaunchSetup = Self.shouldPresentLaunchSetup(lastSeenVersion: lastSeenLaunchSetupVersion)
+        isCloudConnected = !base44Token.isEmpty || !websiteUserID.isEmpty
         uploadedClipURLs = Set(persistedSettings.uploadedClipURLs)
         captureDeviceProfiles = persistedSettings.captureDeviceProfiles
 
@@ -307,6 +380,9 @@ final class AppModel: ObservableObject {
             }
         }
         voiceCommandManager.setPreferredMicrophoneDeviceID(resolvedSelectedMicrophoneDeviceID)
+        if let phrase = customVoiceCommandPhrase, !phrase.isEmpty {
+            voiceCommandManager.setCustomTriggerCommand(phrase)
+        }
 
         log("AppModel initialized")
         savePreferences()
@@ -315,47 +391,132 @@ final class AppModel: ObservableObject {
         observeApplicationLifecycle()
         handlePendingIncomingFeatureActivationURLs()
         handleDeepLinks()
-        startAppInstallationRegistration()
+        Task { await registerAppInstallation() }
         startEntitlementSyncLoop()
         requestNotificationAuthorizationIfNeeded()
-
-        // Start entitlement polling every second
-        entitlementRefreshTimer = Timer.publish(every: 1.0, on: .main, in: .common)
-            .autoconnect()
-            .sink { [weak self] _ in
-                Task { @MainActor in
-                    await self?.refreshEntitlementsFromBackend()
-                }
-            }
+        if isDeveloperBuild, !developerAccessToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            Task { await restoreDeveloperSession() }
+        }
     }
 
     // Polls the backend for the latest entitlements and updates unlockedPaidFeatures
     private func refreshEntitlementsFromBackend() async {
-        guard let url = Self.accountServiceBaseURL()?.appendingPathComponent("api/account/lookup") else { return }
+        guard !isEntitlementSyncInFlight else {
+            return
+        }
+
+        isEntitlementSyncInFlight = true
+        defer { isEntitlementSyncInFlight = false }
+
+        log(" Entitlement sync: checking for appUUID=" + appUUID)
+        guard let endpoint = Self.accountServiceAPIURL(path: "entitlements/by-user-id") else {
+            log(" Entitlement sync: invalid API base URL")
+            return
+        }
+
+        guard var components = URLComponents(url: endpoint, resolvingAgainstBaseURL: false) else {
+            log(" Entitlement sync: invalid entitlement URL components")
+            return
+        }
+
+        components.queryItems = [URLQueryItem(name: "appUuid", value: appUUID)]
+
+        guard let url = components.url else {
+            log(" Entitlement sync: failed to build entitlement URL")
+            return
+        }
+
         var request = URLRequest(url: url)
-        request.httpMethod = "POST"
+        request.httpMethod = "GET"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        let body: [String: String] = ["appUuid": appUUID]
-        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
         request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
         request.timeoutInterval = 5
 
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
-            guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else { return }
-            let payload = try JSONDecoder().decode(BackendEntitlementSnapshot.self, from: data)
-            applyBackendEntitlementSnapshot(payload)
+            let httpResponse = response as? HTTPURLResponse
+            guard let httpResponse = httpResponse, httpResponse.statusCode == 200 else {
+                log(" Entitlement sync: got status " + String(httpResponse?.statusCode ?? 0))
+                return
+            }
+            markBackendConnectionAlive(showNotification: false)
+            if let payload = try? JSONDecoder().decode(BackendEntitlementSnapshot.self, from: data) {
+                applyBackendEntitlementSnapshot(payload)
+            }
         } catch {
-            // Ignore errors (offline, etc)
+            markBackendConnectionUnavailable()
+            log(" Entitlement sync error: " + error.localizedDescription)
         }
     }
 
-    private func startAppInstallationRegistration() {
-        // TODO: Implement app installation registration
+    private func registerAppInstallation() async {
+        guard let url = Self.accountServiceAPIURL(path: "app-installations/resolve"),
+              let machineIdentity = MachineIdentityProvider.current() else { return }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+#if DEBUG
+        let payload = AppInstallationRegistrationPayload(
+            appUuid: appUUID,
+            machineIdentifier: machineIdentity.identifier,
+            machineName: machineIdentity.name,
+            machineModel: machineIdentity.modelIdentifier,
+            systemVersion: machineIdentity.systemVersion,
+            appVersion: Self.appShortVersionString(),
+            buildVersion: Self.appBuildVersionString(),
+            ownerLocked: true
+        )
+#else
+        let payload = AppInstallationRegistrationPayload(
+            appUuid: appUUID,
+            machineIdentifier: machineIdentity.identifier,
+            machineName: machineIdentity.name,
+            machineModel: machineIdentity.modelIdentifier,
+            systemVersion: machineIdentity.systemVersion,
+            appVersion: Self.appShortVersionString(),
+            buildVersion: Self.appBuildVersionString(),
+            ownerLocked: false
+        )
+#endif
+        request.httpBody = try? JSONEncoder().encode(payload)
+        request.timeoutInterval = 5
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse,
+                  (200...201).contains(httpResponse.statusCode),
+                  let snapshot = try? JSONDecoder().decode(AppInstallationRegistrationSnapshot.self, from: data) else {
+                return
+            }
+
+            markBackendConnectionAlive(showNotification: true)
+
+            let newAppUuid = snapshot.installation.appUuid
+            hasResolvedInstallationIdentity = true
+            if !newAppUuid.isEmpty, newAppUuid != appUUID {
+                appUUID = newAppUuid
+                savePreferences()
+            }
+
+            await refreshEntitlementsFromBackend()
+        } catch {
+            markBackendConnectionUnavailable()
+        }
     }
 
     private func startEntitlementSyncLoop() {
-        // TODO: Implement entitlement sync loop
+        entitlementSyncTask?.cancel()
+        entitlementSyncTask = Task { [weak self] in
+            guard let self else { return }
+            await refreshEntitlementsFromBackend()
+            while !Task.isCancelled {
+                if !hasResolvedInstallationIdentity {
+                    await registerAppInstallation()
+                }
+                try? await Task.sleep(nanoseconds: 120_000_000_000)
+                await refreshEntitlementsFromBackend()
+            }
+        }
     }
 
     // Structure for backend entitlement response
@@ -363,29 +524,111 @@ final class AppModel: ObservableObject {
         let user: BackendEntitlementUser
     }
     private struct BackendEntitlementUser: Decodable {
-        let paidFeatures: [String]
+        let id: String?
         let accountStatus: String?
+        let subscriptionTier: String?
+        let paidFeatures: [String]?
+        let updatedAt: String?
     }
 
     // Applies backend entitlement snapshot to local state
     private func applyBackendEntitlementSnapshot(_ snapshot: BackendEntitlementSnapshot) {
-        let normalizedFeatures = FeatureActivationManager.normalizedFeatures(snapshot.user.paidFeatures)
+        let normalizedTier = (snapshot.user.subscriptionTier ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let tierFeatures = normalizedTier == "pro" ? [PaidFeatureKey.fourKPro.rawValue] : []
+        let normalizedFeatures = FeatureActivationManager.normalizedFeatures((snapshot.user.paidFeatures ?? []) + tierFeatures)
         let previousFeatures = Set(unlockedPaidFeatures)
         let currentFeatures = Set(normalizedFeatures)
         let addedFeatures = currentFeatures.subtracting(previousFeatures)
         let removedFeatures = previousFeatures.subtracting(currentFeatures)
+        let isInitialEntitlementSnapshot = !hasAppliedInitialEntitlementSnapshot
+        let shouldNotifyAboutEntitlementChanges = hasAppliedInitialEntitlementSnapshot
+        let hasFourKProNow = currentFeatures.contains(PaidFeatureKey.fourKPro.rawValue)
+        let shouldCelebrateRestoredFourK = isInitialEntitlementSnapshot
+            && hasFourKProNow
+            && !hasAcknowledgedFourKProUnlock
+        var shouldPersistPreferences = false
+
+        hasAppliedInitialEntitlementSnapshot = true
 
         if unlockedPaidFeatures != normalizedFeatures {
+            log(" Entitlement CHANGED: " + Array(previousFeatures).description + " -> " + Array(currentFeatures).description)
             unlockedPaidFeatures = normalizedFeatures
-            // Show notification if 4K Pro was just unlocked
-            if addedFeatures.contains(PaidFeatureKey.fourKPro.rawValue) {
-                // celebrateActivatedFeature(PaidFeatureKey.fourKPro.rawValue, userID: "", isNewUnlock: true)
+            shouldPersistPreferences = true
+            log(" Features now: " + String(describing: unlockedPaidFeatures))
+            if shouldNotifyAboutEntitlementChanges, addedFeatures.contains(PaidFeatureKey.fourKPro.rawValue) {
+                statusText = "4K Pro unlocked for this Mac."
+                postFourKProAvailabilityNotification(restoredForThisInstallation: false)
             }
-            // Optionally, show notification if Pro was removed
-            if removedFeatures.contains(PaidFeatureKey.fourKPro.rawValue) {
+            if shouldNotifyAboutEntitlementChanges, removedFeatures.contains(PaidFeatureKey.fourKPro.rawValue) {
+                _ = enforce4KProResolutionAccess(showStatus: false)
                 statusText = "4K Pro was removed for this Mac."
+                postFeatureEntitlementNotification(
+                    title: "4K Pro removed",
+                    message: "This Mac no longer has Pro access. Capture fell back to the free resolution tier.",
+                    tone: .standard
+                )
             }
+
+        } else {
+            log(" Features unchanged: " + String(describing: normalizedFeatures))
         }
+
+        if shouldCelebrateRestoredFourK {
+            postFourKProAvailabilityNotification(restoredForThisInstallation: true)
+        }
+
+        if hasFourKProNow, !hasAcknowledgedFourKProUnlock {
+            hasAcknowledgedFourKProUnlock = true
+            shouldPersistPreferences = true
+        }
+
+        if shouldPersistPreferences {
+            savePreferences()
+        }
+    }
+
+    private func markBackendConnectionAlive(showNotification: Bool) {
+        let wasConnected = isBackendConnected
+        isBackendConnected = true
+
+        guard showNotification, !hasShownBackendConnectionNotification, !wasConnected else {
+            return
+        }
+
+        hasShownBackendConnectionNotification = true
+        statusText = "MacClipper is synced and ready."
+
+        guard enableGameNotifications else { return }
+        GameNotificationManager.shared.show(
+            title: "Your Mac is in sync",
+            message: "Everything clicked into place. MacClipper is ready for your next beautiful clip.",
+            sourceApp: nil,
+            tone: .celebratory
+        )
+    }
+
+    private func markBackendConnectionUnavailable() {
+        isBackendConnected = false
+    }
+
+    private func postFeatureEntitlementNotification(title: String, message: String, tone: GameNotificationTone) {
+        // Purchase/entitlement changes are important account signals, so always show them.
+        GameNotificationManager.shared.show(
+            title: title,
+            message: message,
+            sourceApp: nil,
+            tone: tone
+        )
+    }
+
+    private func postFourKProAvailabilityNotification(restoredForThisInstallation: Bool) {
+        postFeatureEntitlementNotification(
+            title: restoredForThisInstallation ? "4K Pro is back" : "4K Pro unlocked",
+            message: restoredForThisInstallation
+                ? "Full-resolution capture lit back up on this Mac. Your next big moment can land in radiant 4K."
+                : "Full-resolution capture just lit up. Your next big moment can land in radiant 4K.",
+            tone: .celebratory
+        )
     }
 
     private func handleDeepLinks() {
@@ -395,41 +638,130 @@ final class AppModel: ObservableObject {
             queue: .main
         ) { [weak self] notification in
             guard let urls = notification.userInfo?[AppDelegate.deepLinkUserInfoKey] as? [URL] else { return }
-            for url in urls {
-                self?.handleDeepLink(url)
+            Task { @MainActor in
+                for url in urls {
+                    self?.handleDeepLink(url)
+                }
             }
         }
     }
 
     private func handleDeepLink(_ url: URL) {
         if url.scheme == "macclipper" && url.host == "connect" {
-            // Show success page
-            showConnectionSuccess()
+            let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+            let linkedWebsiteUserID = FeatureActivationManager.normalizedUserID(
+                components?.queryItems?.first(where: { $0.name == "websiteUserId" })?.value ?? ""
+            )
+            let attemptID = (components?.queryItems?.first(where: { $0.name == "attemptId" })?.value ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            showConnectionSuccess(websiteUserID: linkedWebsiteUserID, attemptID: attemptID)
+            return
         }
+
+        handleIncomingFeatureActivationURL(url)
     }
 
-    private func showConnectionSuccess() {
-        // Show notification or open success window
+    private func showConnectionSuccess(websiteUserID linkedWebsiteUserID: String = "", attemptID: String = "") {
+        if !linkedWebsiteUserID.isEmpty {
+            websiteUserID = linkedWebsiteUserID
+        }
+
+        let hasLinkedWebsiteUser = !websiteUserID.isEmpty
+
+        // Redirect browser back to the website with this app's UUID so the link page
+        // can complete the handshake (OAuth-callback style).
+        if hasLinkedWebsiteUser {
+            // Build the fragment WITH query params embedded so HashRouter can read them.
+            // URLComponents.queryItems puts params before the '#', making them invisible
+            // to React Router (useLocation returns empty search in that case).
+            // Correct URL: https://macclipper.co/#/link-app?appUuid=X&linked=1&websiteUserId=Y
+            var hashParams = URLComponents()
+            hashParams.queryItems = [
+                URLQueryItem(name: "appUuid", value: appUUID),
+                URLQueryItem(name: "linked", value: "1"),
+                URLQueryItem(name: "websiteUserId", value: websiteUserID),
+                URLQueryItem(name: "attemptId", value: attemptID)
+            ]
+            var callbackComponents = URLComponents(string: "https://macclipper.co/")
+            callbackComponents?.fragment = "/link-app?\(hashParams.query ?? "")"
+
+            if let callbackURL = callbackComponents?.url {
+                NSWorkspace.shared.open(callbackURL)
+            }
+            // Also register the link on the backend as a polling fallback.
+            Task { await registerAppLink(websiteUserID: websiteUserID, attemptID: attemptID) }
+        }
+
         if enableGameNotifications {
             GameNotificationManager.shared.show(
                 title: "Successfully Connected!",
-                message: "MacClipper is now connected to your cloud account. Your clips will automatically sync.",
+                message: hasLinkedWebsiteUser
+                    ? "MacClipper is now linked to your dashboard account. New cloud links can show up on the website."
+                    : "MacClipper received the cloud link handoff.",
                 sourceApp: nil,
                 tone: .celebratory
             )
         }
-        statusText = "Successfully connected to cloud account!"
-        isCloudConnected = true
+        statusText = hasLinkedWebsiteUser
+            ? "MacClipper linked to your dashboard account."
+            : "MacClipper received the link handoff."
+        isCloudConnected = !base44Token.isEmpty || hasLinkedWebsiteUser
+        log("cloud link established websiteUserID=\(websiteUserID.isEmpty ? "none" : websiteUserID)")
         savePreferences()
     }
 
+    private func registerAppLink(websiteUserID linkedWebsiteUserID: String, attemptID: String = "") async {
+        guard !linkedWebsiteUserID.isEmpty else { return }
+
+        var candidateURLs: [URL] = []
+        if let primaryURL = Self.accountServiceAPIURL(path: "app-link") {
+            candidateURLs.append(primaryURL)
+        }
+        if let websiteURL = URL(string: "https://macclipper.co/api/app-link") {
+            candidateURLs.append(websiteURL)
+        }
+        if let cloudFunctionURL = URL(string: "https://us-central1-macclipper-ce502.cloudfunctions.net/api/app-link") {
+            candidateURLs.append(cloudFunctionURL)
+        }
+
+        let body: [String: String] = ["appUuid": appUUID, "websiteUserId": linkedWebsiteUserID, "attemptId": attemptID]
+        let encodedBody = try? JSONEncoder().encode(body)
+
+        for url in candidateURLs {
+            var request = URLRequest(url: url)
+            request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = encodedBody
+            request.timeoutInterval = 5
+
+            do {
+                let (_, response) = try await URLSession.shared.data(for: request)
+                if let httpResponse = response as? HTTPURLResponse,
+                   (200...299).contains(httpResponse.statusCode) {
+                    log("app-link registered websiteUserID=\(linkedWebsiteUserID) endpoint=\(url.absoluteString)")
+                    return
+                }
+
+                if let httpResponse = response as? HTTPURLResponse {
+                    log("app-link registration failed status=\(httpResponse.statusCode) endpoint=\(url.absoluteString)")
+                }
+            } catch {
+                log("app-link registration error endpoint=\(url.absoluteString) error=\(error.localizedDescription)")
+            }
+        }
+
+        log("app-link registration exhausted all endpoints websiteUserID=\(linkedWebsiteUserID)")
+    }
+
     func openCloudConnectURL() {
-        let url = URL(string: "https://macclipper-ce502.web.app")!
+        var components = URLComponents(string: "https://macclipper.co/")
+        components?.fragment = "link-app?appUuid=\(appUUID.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? appUUID)"
+        let url = components?.url ?? URL(string: "https://macclipper.co/#/link-app")!
         NSWorkspace.shared.open(url)
     }
 
     func openCloudDashboard() {
-        let url = URL(string: "https://macclipper-ce502.web.app/clips")!
+        let url = URL(string: "https://macclipper.co/#/dashboard")!
         NSWorkspace.shared.open(url)
     }
 
@@ -524,6 +856,10 @@ final class AppModel: ObservableObject {
             ? " Voice trigger is sharing the same live capture mic instead of opening a second mic session."
             : ""
 
+        if includeMicrophone && captureSystemAudio && microphoneCaptureSuppressed && shouldPreventEchoBySuppressingMicrophone {
+            return "Microphone capture is temporarily disabled to prevent echo because this input is a loopback/system-monitor source while System Audio is on."
+        }
+
         if includeMicrophone {
             switch AVCaptureDevice.authorizationStatus(for: .audio) {
             case .denied, .restricted:
@@ -562,6 +898,41 @@ final class AppModel: ObservableObject {
         "MacClipper creates this install UUID on first launch. Use it for bot grants, linking this Mac, and support when you need to identify this app install."
     }
 
+    var isDeveloperBuild: Bool {
+        Self.isDeveloperBuildEnabled()
+    }
+
+    var developerInstallationCountText: String {
+        let count = filteredDeveloperInstallations.count
+        if count == 0 {
+            return developerInstallations.isEmpty ? "No tracked Macs loaded yet" : "No Macs match the current search"
+        }
+
+        return "\(count) tracked Mac\(count == 1 ? "" : "s")"
+    }
+
+    var filteredDeveloperInstallations: [DeveloperInstallationSummary] {
+        let query = developerSearchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !query.isEmpty else {
+            return developerInstallations
+        }
+
+        return developerInstallations.filter { installation in
+            let searchFields = [
+                installation.installation.appUuid,
+                installation.installation.machineName,
+                installation.installation.machineModel,
+                installation.installation.appVersion,
+                installation.installation.buildVersion,
+                installation.linkedUser?.displayName ?? "",
+                installation.linkedUser?.email ?? "",
+                installation.linkedUser?.discordUsername ?? ""
+            ]
+
+            return searchFields.contains { $0.localizedCaseInsensitiveContains(query) }
+        }
+    }
+
 
     var captureResolutionSettingsSubtitle: String {
         if hasUnlocked4KPro {
@@ -569,17 +940,17 @@ final class AppModel: ObservableObject {
                 return "Full 3840x2160 capture is enabled and locked to Highest quality."
             }
 
-            return "4K Pro is unlocked. Switch to 4K whenever you want full-resolution clips."
+            return "MacClipper Pro is unlocked. Switch to 4K whenever you want full-resolution clips."
         }
 
-        return "720p through 1440p stay free. Buy 4K Pro once on the website and MacClipper will unlock it after the redirect."
+        return "720p through 1440p stay free. Buy MacClipper Pro once on the website and MacClipper will unlock it after this Mac securely syncs with your account."
     }
 
     var fourKProStatusText: String {
         if hasUnlocked4KPro {
             return "Purchased and active on this Mac."
         }
-        return "Locked. Buy it once and MacClipper will switch back with 4K ready."
+        return "Locked. Buy MacClipper Pro once and MacClipper will unlock 4K after a secure entitlement sync."
     }
 
     var diagnosticsLogFilePath: String {
@@ -604,9 +975,51 @@ final class AppModel: ObservableObject {
         isRecording && includeMicrophone && !microphoneCaptureSuppressed
     }
 
+    private var shouldPreventEchoBySuppressingMicrophone: Bool {
+        guard includeMicrophone, captureSystemAudio else { return false }
+
+        let selectedDevice = Self.microphoneDevice(withID: selectedMicrophoneID)
+        let selectedName = (selectedDevice?.localizedName ?? "").lowercased()
+        return Self.isLikelyLoopbackMicrophoneName(selectedName)
+    }
+
+    private var lowPowerModeEnabled: Bool {
+        if #available(macOS 12.0, *) {
+            return ProcessInfo.processInfo.isLowPowerModeEnabled
+        }
+
+        return false
+    }
+
+    private func runtimeAdjustedRecorderSettings(_ settings: RecorderSettings) -> RecorderSettings {
+        var adjustedSettings = settings
+        let thermalState = ProcessInfo.processInfo.thermalState
+
+        if thermalState == .serious || thermalState == .critical {
+            adjustedSettings.videoQuality = .performance
+            if adjustedSettings.resolutionPreset == .p2160 || adjustedSettings.resolutionPreset == .p1440 {
+                adjustedSettings.resolutionPreset = .p1080
+            }
+            adjustedSettings.clipDuration = min(adjustedSettings.clipDuration, 45)
+            return adjustedSettings
+        }
+
+        if lowPowerModeEnabled {
+            if adjustedSettings.videoQuality == .highest {
+                adjustedSettings.videoQuality = .balanced
+            }
+            if adjustedSettings.resolutionPreset == .p2160 {
+                adjustedSettings.resolutionPreset = .p1440
+            }
+            adjustedSettings.clipDuration = min(adjustedSettings.clipDuration, 60)
+        }
+
+        return adjustedSettings
+    }
+
     private var currentSettings: RecorderSettings {
         let resolvedResolutionPreset = resolvedCaptureResolutionPreset(for: captureResolutionPreset)
-        return RecorderSettings(
+        let settings = RecorderSettings(
             clipDuration: clipDuration,
             saveDirectory: URL(fileURLWithPath: saveDirectoryPath, isDirectory: true),
             includeMicrophone: includeMicrophone && !microphoneCaptureSuppressed,
@@ -619,6 +1032,8 @@ final class AppModel: ObservableObject {
             resolutionPreset: resolvedResolutionPreset,
             videoQuality: effectiveVideoQualityPreset(for: videoQualityPreset, resolutionPreset: resolvedResolutionPreset)
         )
+
+        return runtimeAdjustedRecorderSettings(settings)
     }
 
     func captureResolutionOptionTitle(for preset: CaptureResolutionPreset) -> String {
@@ -634,7 +1049,6 @@ final class AppModel: ObservableObject {
         startReplayBufferOnLaunch = true
         shortcutKey = String((shortcutKey.isEmpty ? "9" : shortcutKey.prefix(1))).uppercased()
         appUUID = Self.resolvedAppUUID(appUUID)
-        // websiteUserID removed
         unlockedPaidFeatures = FeatureActivationManager.normalizedFeatures(unlockedPaidFeatures)
         captureResolutionPreset = resolvedCaptureResolutionPreset(for: captureResolutionPreset)
         videoQualityPreset = effectiveVideoQualityPreset(for: videoQualityPreset, resolutionPreset: captureResolutionPreset)
@@ -653,8 +1067,7 @@ final class AppModel: ObservableObject {
         defaults.set(captureResolutionPreset.rawValue, forKey: "captureResolutionPreset")
         defaults.set(videoQualityPreset.rawValue, forKey: "videoQualityPreset")
         defaults.set(appUUID, forKey: "appUUID")
-        // websiteUserID removed
-        defaults.set(unlockedPaidFeatures, forKey: "unlockedPaidFeatures")
+        defaults.removeObject(forKey: "unlockedPaidFeatures")
         defaults.set(shortcutKey, forKey: "shortcutKey")
         defaults.set(useCommand, forKey: "useCommand")
         defaults.set(useShift, forKey: "useShift")
@@ -673,8 +1086,27 @@ final class AppModel: ObservableObject {
             }
         }
         voiceCommandManager.setPreferredMicrophoneDeviceID(resolvedSelectedMicrophoneDeviceID)
+        refreshMicrophoneCaptureSuppression()
         refreshVoiceCommandListenerState()
         recorder.update(settings: currentSettings)
+    }
+
+    func completeOnboarding() {
+        hasCompletedOnboarding = true
+        acknowledgeLaunchSetupForCurrentVersion()
+        savePreferences()
+    }
+
+    func dismissLaunchSetup() {
+        acknowledgeLaunchSetupForCurrentVersion()
+        savePreferences()
+    }
+
+    func resetOnboarding() {
+        hasCompletedOnboarding = false
+        lastSeenLaunchSetupVersion = nil
+        shouldShowLaunchSetup = true
+        savePreferences()
     }
 
     func setVideoQualityPreset(_ preset: VideoQualityPreset) {
@@ -694,7 +1126,7 @@ final class AppModel: ObservableObject {
 
     func setCaptureResolutionPreset(_ preset: CaptureResolutionPreset) {
         if preset.requires4KProUnlock && !hasUnlocked4KPro {
-            statusText = "4K Pro opens on the website purchase page. Buy it once and MacClipper will unlock it on the way back."
+            statusText = "Pro opens on the website subscription page. Buy it once and MacClipper will unlock it on the way back."
             open4KPurchasePage()
             return
         }
@@ -764,30 +1196,103 @@ final class AppModel: ObservableObject {
         statusText = "Copied app UUID."
     }
 
+    func developerAuthenticate() {
+        guard !isDeveloperBusy else { return }
+        Task { await authenticateDeveloperSession(showNotification: true) }
+    }
+
+    func developerSignOut() {
+        DeveloperAccessStore.clearToken(service: Self.developerAccessStoreService())
+        developerAccessToken = ""
+        developerInstallations = []
+        developerStatusText = "Signed out of the Firebase admin session."
+    }
+
+    func refreshDeveloperInstallations() {
+        guard !isDeveloperBusy else { return }
+        Task { await reloadDeveloperInstallations() }
+    }
+
+    private func restoreDeveloperSession() async {
+        await authenticateDeveloperSession(showNotification: false)
+    }
+
+    private func authenticateDeveloperSession(showNotification: Bool) async {
+        guard isDeveloperBuild else { return }
+        let accessToken = developerAccessToken.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard !accessToken.isEmpty else {
+            developerStatusText = "Enter the Firebase developer access token to continue."
+            return
+        }
+
+        guard let apiBaseURL = Self.accountServiceAPIBaseURL() else {
+            developerStatusText = "MacClipper could not build the Firebase admin API URL."
+            return
+        }
+
+        isDeveloperBusy = true
+        defer { isDeveloperBusy = false }
+
+        do {
+            try await DeveloperAdminClient.validateSession(apiBaseURL: apiBaseURL, accessToken: accessToken)
+            try DeveloperAccessStore.saveToken(accessToken, service: Self.developerAccessStoreService())
+            developerStatusText = "Firebase admin connected. Loading tracked Macs…"
+
+            if showNotification {
+                postFeatureEntitlementNotification(
+                    title: "Firebase admin ready",
+                    message: "MacClipper Dev signed into the private Firebase admin API.",
+                    tone: .celebratory
+                )
+            }
+
+            let installations = try await DeveloperAdminClient.listInstallations(apiBaseURL: apiBaseURL, accessToken: accessToken, limit: 120)
+            developerInstallations = installations
+            developerStatusText = installations.isEmpty
+                ? "Firebase admin connected. No tracked Macs are registered yet."
+                : "Firebase admin connected. Loaded \(installations.count) tracked Macs."
+        } catch {
+            developerStatusText = error.localizedDescription
+        }
+    }
+
+    private func reloadDeveloperInstallations() async {
+        guard isDeveloperBuild else { return }
+        let accessToken = developerAccessToken.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard !accessToken.isEmpty else {
+            developerInstallations = []
+            developerStatusText = "Sign in to Firebase admin before loading tracked Macs."
+            return
+        }
+
+        guard let apiBaseURL = Self.accountServiceAPIBaseURL() else {
+            developerStatusText = "MacClipper could not build the Firebase admin API URL."
+            return
+        }
+
+        isDeveloperBusy = true
+        defer { isDeveloperBusy = false }
+
+        do {
+            let installations = try await DeveloperAdminClient.listInstallations(apiBaseURL: apiBaseURL, accessToken: accessToken, limit: 120)
+            developerInstallations = installations
+            developerStatusText = installations.isEmpty
+                ? "Firebase admin connected. No tracked Macs are registered yet."
+                : "Firebase admin connected. Loaded \(installations.count) tracked Macs."
+        } catch {
+            developerStatusText = error.localizedDescription
+        }
+    }
+
     // func copyWebsiteUserID removed
 
     func reloadClips() {
         let folderURL = URL(fileURLWithPath: saveDirectoryPath, isDirectory: true)
-        let preferredLastClipURL = lastClipURL
-        let preferredSelectedClipURL = selectedClip?.url
-
-        reloadClipsTask?.cancel()
-        reloadClipsTask = Task.detached(priority: .utility) { [weak self, folderURL, preferredLastClipURL, preferredSelectedClipURL] in
-            try? ClipStorageManager.ensureRootDirectory(at: folderURL)
-            let uploadedClipURLs = await MainActor.run { self?.uploadedClipURLs ?? [] }
-            let loadedClips = ClipLibraryLoader.loadSavedClips(from: folderURL, uploadedClipURLs: uploadedClipURLs)
-
-            guard !Task.isCancelled else { return }
-
-            await MainActor.run {
-                guard let self, self.saveDirectoryPath == folderURL.path else { return }
-                self.applyLoadedClips(
-                    loadedClips,
-                    preferredLastClipURL: preferredLastClipURL,
-                    preferredSelectedClipURL: preferredSelectedClipURL
-                )
-            }
-        }
+        try? ClipStorageManager.ensureRootDirectory(at: folderURL)
+        let loadedClips = ClipLibraryLoader.loadSavedClips(from: folderURL, uploadedClipURLs: [])
+        applyLoadedClips(loadedClips, preferredLastClipURL: lastClipURL, preferredSelectedClipURL: selectedClip?.url)
     }
 
     private func observeApplicationLifecycle() {
@@ -861,8 +1366,9 @@ final class AppModel: ObservableObject {
     private func handleRecordingStartError(_ error: Error) -> Bool {
         switch error {
         case RecorderError.screenPermissionDenied:
-            shouldRetryAutomaticStart = startReplayBufferOnLaunch
-            statusText = "Allow Screen Recording in System Settings, then return to MacClipper."
+            shouldRetryAutomaticStart = true
+            statusText = "MacClipper needs Screen Recording permission to capture your screen."
+            PrivacyPermissionNavigator.requestAndOpenSettings(for: .screenRecording)
             return false
         case RecorderError.microphonePermissionDenied:
             if includeMicrophone && !microphoneCaptureSuppressed {
@@ -875,6 +1381,7 @@ final class AppModel: ObservableObject {
 
             shouldRetryAutomaticStart = false
             statusText = "Allow Microphone access in System Settings, then return to MacClipper."
+            PrivacyPermissionNavigator.requestAndOpenSettings(for: .microphone)
             return false
         default:
             shouldRetryAutomaticStart = startReplayBufferOnLaunch
@@ -1054,6 +1561,8 @@ final class AppModel: ObservableObject {
                     switch recorderError {
                     case .bufferNotReady, .noBufferedClip:
                         break
+                    case .captureStalled:
+                        handleUnexpectedRecorderStop(recorderError)
                     default:
                         postClipFailedNotification(
                             sourceApp: request.sourceApp,
@@ -1088,6 +1597,12 @@ final class AppModel: ObservableObject {
     }
 
     func openClipsFolder() {
+        guard !saveDirectoryPath.isEmpty else {
+            let url = URL(fileURLWithPath: defaultSaveDirectory, isDirectory: true)
+            try? ClipStorageManager.ensureRootDirectory(at: url)
+            NSWorkspace.shared.open(url)
+            return
+        }
         let url = URL(fileURLWithPath: saveDirectoryPath, isDirectory: true)
         try? ClipStorageManager.ensureRootDirectory(at: url)
         NSWorkspace.shared.open(url)
@@ -1137,45 +1652,41 @@ final class AppModel: ObservableObject {
         guard !webhookURL.isEmpty else {
             postClipFailedNotification(
                 sourceApp: nil,
-                title: "Discord not connected",
-                message: "Paste a Discord channel webhook in Settings before testing the connection."
+                title: "Public posting unavailable",
+                message: "This build is missing its locked online post target."
             )
             return
         }
 
-        statusText = "Testing Discord channel…"
+        statusText = "Testing public posting…"
 
         Task { @MainActor [weak self] in
             guard let self else { return }
 
             do {
                 try await self.discordWebhookManager.testWebhook(webhookURLString: webhookURL)
-                self.statusText = "Discord channel is connected"
+                self.statusText = "Public posting is ready"
                 self.postDiscordConnectionSuccessNotification()
             } catch {
                 self.statusText = error.localizedDescription
                 self.postClipFailedNotification(
                     sourceApp: nil,
-                    title: "Discord test failed",
+                    title: "Public post test failed",
                     message: error.localizedDescription
                 )
             }
         }
     }
 
-    func showDiscordWebhookSetupGuide() {
+    func showPublicPostingUnavailableNotice() {
         let alert = NSAlert()
         alert.alertStyle = .informational
-        alert.messageText = "How To Connect Discord"
-        alert.informativeText = "1. Open Discord.\n2. Open your server settings.\n3. Go to Integrations > Webhooks.\n4. Create a webhook for the channel you want clips sent to.\n5. Copy the webhook URL.\n6. Paste it into MacClipper Settings under Discord.\n7. Click Test Channel."
-        alert.addButton(withTitle: "Open Discord")
+        alert.messageText = "Public posting isn't ready"
+        alert.informativeText = "This build is supposed to ship with a locked online post target. Reinstall the latest MacClipper build if posting stays unavailable."
         alert.addButton(withTitle: "Close")
 
         NSApplication.shared.activate(ignoringOtherApps: true)
-        if alert.runModal() == .alertFirstButtonReturn,
-           let url = URL(string: "https://discord.com/channels/@me") {
-            NSWorkspace.shared.open(url)
-        }
+        _ = alert.runModal()
     }
 
     func pickSaveDirectory() {
@@ -1221,6 +1732,19 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func clearAppCache() {
+        let bufferDirectory = FileManager.default.temporaryDirectory.appendingPathComponent("MacClipperBuffer", isDirectory: true)
+        if let contents = try? FileManager.default.contentsOfDirectory(at: bufferDirectory, includingPropertiesForKeys: nil) {
+            for fileURL in contents {
+                try? FileManager.default.removeItem(at: fileURL)
+            }
+        }
+        uploadedClipURLs = []
+        savePreferences()
+        log("Cache cleared: buffer files removed, upload tracking reset")
+        statusText = "Cache cleared."
+    }
+
     private func captureSourceAppSnapshot() -> ClipSourceApp? {
         CaptureSourceAppDetector.captureCurrentSourceApp(bundleIdentifier: Bundle.main.bundleIdentifier)
     }
@@ -1259,17 +1783,16 @@ final class AppModel: ObservableObject {
     }
 
     private static func audioCaptureDevices() -> [AVCaptureDevice] {
-        AVCaptureDevice.DiscoverySession(deviceTypes: [.microphone], mediaType: .audio, position: .unspecified).devices
-            .sorted { $0.localizedName.localizedCaseInsensitiveCompare($1.localizedName) == .orderedAscending }
+        AudioCaptureDeviceCatalog.devices()
     }
 
     private static func defaultMicrophoneDevice() -> AVCaptureDevice? {
-        AVCaptureDevice.default(for: .audio) ?? audioCaptureDevices().first
+        AudioCaptureDeviceCatalog.preferredDevice(preferredUniqueID: nil)
     }
 
     private static func microphoneDevice(withID deviceID: String) -> AVCaptureDevice? {
         guard !deviceID.isEmpty else { return defaultMicrophoneDevice() }
-        return audioCaptureDevices().first(where: { $0.uniqueID == deviceID })
+        return AudioCaptureDeviceCatalog.device(withUniqueID: deviceID)
     }
 
     private static func resolvedMicrophoneDeviceID(from deviceID: String) -> String? {
@@ -1299,6 +1822,24 @@ final class AppModel: ObservableObject {
         }
 
         return options
+    }
+
+    private static func isLikelyLoopbackMicrophoneName(_ value: String) -> Bool {
+        guard !value.isEmpty else { return false }
+
+        let loopbackKeywords = [
+            "blackhole",
+            "loopback",
+            "virtual",
+            "monitor",
+            "stereo mix",
+            "system mix",
+            "aggregate",
+            "vb-audio",
+            "soundflower"
+        ]
+
+        return loopbackKeywords.contains(where: { value.localizedCaseInsensitiveContains($0) })
     }
 
     private func resolvedCaptureResolutionPreset(for preset: CaptureResolutionPreset) -> CaptureResolutionPreset {
@@ -1344,45 +1885,43 @@ final class AppModel: ObservableObject {
             || normalizedPath == "/purchase-complete"
 
         guard isFeatureGrantURL,
-              let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
-              let queryItems = components.queryItems,
-              let userID = queryItems.first(where: { $0.name == "userId" })?.value,
-              let feature = queryItems.first(where: { $0.name == "feature" })?.value,
-              let token = queryItems.first(where: { $0.name == "token" })?.value else {
+              let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
             return
         }
 
-        let normalizedUserID = FeatureActivationManager.normalizedUserID(userID)
-        let normalizedFeature = FeatureActivationManager.normalizedFeature(feature)
+        let queryItems = components.queryItems ?? []
+        let normalizedUserID = FeatureActivationManager.normalizedUserID(
+            queryItems.first(where: { $0.name == "userId" })?.value ?? ""
+        )
+        let normalizedFeature = FeatureActivationManager.normalizedFeature(
+            queryItems.first(where: { $0.name == "feature" })?.value ?? ""
+        )
 
-        guard FeatureActivationManager.isValidActivationToken(userID: normalizedUserID, feature: normalizedFeature, token: token) else {
-            statusText = "MacClipper rejected that feature unlock link."
-            return
+        if !normalizedUserID.isEmpty {
+            websiteUserID = normalizedUserID
         }
 
-        applyActivatedFeature(normalizedFeature, for: normalizedUserID)
+        refreshEntitlementsAfterPurchaseRedirect(feature: normalizedFeature)
     }
 
-    private func applyActivatedFeature(_ feature: String, for userID: String) {
-        let wasAlreadyUnlocked = unlockedPaidFeatures.contains(feature)
+    private func refreshEntitlementsAfterPurchaseRedirect(feature: String) {
+        let featureName = feature.isEmpty
+            ? "your account"
+            : FeatureActivationManager.featureDisplayName(feature)
 
-        websiteUserID = userID
-        unlockedPaidFeatures = FeatureActivationManager.normalizedFeatures(unlockedPaidFeatures + [feature])
-
-        if feature == PaidFeatureKey.fourKPro.rawValue {
-            captureResolutionPreset = .p2160
-            videoQualityPreset = .highest
-            statusText = wasAlreadyUnlocked
-                ? "4K Pro is already active for user \(userID)."
-                : "4K Pro unlocked. Capture switched to 4K Highest quality."
-        } else {
-            statusText = wasAlreadyUnlocked
-                ? "\(FeatureActivationManager.featureDisplayName(feature)) is already active for user \(userID)."
-                : "\(FeatureActivationManager.featureDisplayName(feature)) unlocked for user \(userID)."
-        }
-
+        statusText = "Refreshing \(featureName) access for this Mac..."
         savePreferences()
-        // celebrateActivatedFeature(feature, userID: userID, isNewUnlock: !wasAlreadyUnlocked)
+
+        Task { [weak self] in
+            guard let self else { return }
+
+            if !self.hasResolvedInstallationIdentity {
+                await self.registerAppInstallation()
+                return
+            }
+
+            await self.refreshEntitlementsFromBackend()
+        }
     }
 
     private static func purchasePortalURL() -> URL? {
@@ -1390,6 +1929,17 @@ final class AppModel: ObservableObject {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let resolvedURLString = configuredURL.isEmpty ? defaultPurchasePortalURLString : configuredURL
         return URL(string: resolvedURLString)
+    }
+
+    private static func configuredAccountServiceAPIBaseURL() -> URL? {
+        let configuredURL = ((Bundle.main.object(forInfoDictionaryKey: "MacClipperAPIBaseURL") as? String) ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard !configuredURL.isEmpty else {
+            return nil
+        }
+
+        return URL(string: configuredURL)
     }
 
     private static func accountServiceBaseURL() -> URL? {
@@ -1406,6 +1956,47 @@ final class AppModel: ObservableObject {
         return components.url
     }
 
+    private static func accountServiceAPIBaseURL() -> URL? {
+        if let configuredAPIBaseURL = configuredAccountServiceAPIBaseURL() {
+            return configuredAPIBaseURL
+        }
+
+        guard let baseURL = accountServiceBaseURL() else {
+            return nil
+        }
+
+        return baseURL.appendingPathComponent("api", isDirectory: false)
+    }
+
+    private static func accountServiceAPIURL(path: String) -> URL? {
+        guard let baseURL = accountServiceAPIBaseURL() else {
+            return nil
+        }
+
+        if path.isEmpty {
+            return baseURL
+        }
+
+        return baseURL.appendingPathComponent(path, isDirectory: false)
+    }
+
+    private static func isDeveloperBuildEnabled() -> Bool {
+        (Bundle.main.object(forInfoDictionaryKey: "MacClipperDeveloperMode") as? Bool) ?? false
+    }
+
+    private static func developerAccessStoreService() -> String {
+        ((Bundle.main.bundleIdentifier ?? "local.macclipper.app") + ".firebase-admin")
+            .lowercased()
+    }
+
+    private static func loadDeveloperAccessToken() -> String {
+        guard isDeveloperBuildEnabled() else {
+            return ""
+        }
+
+        return DeveloperAccessStore.loadToken(service: developerAccessStoreService()) ?? ""
+    }
+
     private static func appShortVersionString() -> String {
         ((Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String) ?? "0")
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1414,6 +2005,24 @@ final class AppModel: ObservableObject {
     private static func appBuildVersionString() -> String {
         ((Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String) ?? "0")
             .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func currentLaunchSetupVersion() -> String {
+        "\(appShortVersionString())+\(appBuildVersionString())"
+    }
+
+    private static func normalizedLaunchSetupVersion(_ value: String?) -> String? {
+        let normalizedValue = (value ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return normalizedValue.isEmpty ? nil : normalizedValue
+    }
+
+    private static func shouldPresentLaunchSetup(lastSeenVersion: String?) -> Bool {
+        normalizedLaunchSetupVersion(lastSeenVersion) != currentLaunchSetupVersion()
+    }
+
+    private func acknowledgeLaunchSetupForCurrentVersion() {
+        lastSeenLaunchSetupVersion = Self.currentLaunchSetupVersion()
+        shouldShowLaunchSetup = false
     }
 
     private func handleUnexpectedRecorderStop(_ error: Error) {
@@ -1469,7 +2078,7 @@ final class AppModel: ObservableObject {
 
         do {
             let data = try encoder.encode(metadata)
-            try data.write(to: ClipLibraryLoader.metadataURL(for: clipURL), options: .atomic)
+            try data.write(to: ClipLibraryLoader.metadataURL(for: clipURL), options: .atomicWrite)
         } catch {
             NSLog("MacClipper metadata write failed: \(error.localizedDescription)")
         }
@@ -1486,6 +2095,8 @@ final class AppModel: ObservableObject {
     }
 
     private func postClipStartedNotification(sourceApp: ClipSourceApp?, duration: Int) {
+        ClipSoundEffectPlayer.shared.play(.clipStarted)
+
         guard enableGameNotifications else { return }
 
         let gameName = sourceApp?.name ?? CaptureSourceAppDetector.desktopSourceApp.name
@@ -1521,6 +2132,8 @@ final class AppModel: ObservableObject {
     }
 
     private func postClipSavedNotification(for clipURL: URL, sourceApp: ClipSourceApp?, duration: Int) {
+        ClipSoundEffectPlayer.shared.play(.clipSaved)
+
         let title: String
         if let sourceApp {
             title = sourceApp.isDesktopCapture ? "Desktop clip saved" : "\(sourceApp.name) clip saved"
@@ -1544,7 +2157,7 @@ final class AppModel: ObservableObject {
         content.title = title
         content.subtitle = "Last \(duration) seconds captured and in your folder"
         content.body = clipURL.lastPathComponent
-        content.sound = .default
+        decorateSystemNotificationContent(content)
 
         let request = UNNotificationRequest(
             identifier: "clip-saved-\(UUID().uuidString)",
@@ -1564,17 +2177,17 @@ final class AppModel: ObservableObject {
             GameNotificationAction(title: "Share", systemImage: "square.and.arrow.up", tint: MacClipperTheme.cyan) { [weak self] in
                 self?.presentSharePanel(for: clipURL, sourceApp: sourceApp)
             },
+            GameNotificationAction(title: "Copy", systemImage: "doc.on.doc", tint: MacClipperTheme.success) { [weak self] in
+                self?.copyClipToClipboard(clipURL)
+            },
             GameNotificationAction(title: "Reveal", systemImage: "folder.fill", tint: MacClipperTheme.ember) { [weak self] in
                 self?.revealClip(at: clipURL)
-            },
-            GameNotificationAction(title: "Cloud", systemImage: "cloud.fill", tint: MacClipperTheme.cyan) { [weak self] in
-                self?.uploadClipToSupabase(clipURL, sourceApp: sourceApp)
             }
         ]
 
         if hasDiscordWebhookConfigured {
             actions.append(
-                GameNotificationAction(title: "Discord", systemImage: "paperplane.fill", tint: MacClipperTheme.cyan) { [weak self] in
+                GameNotificationAction(title: "Post Online", systemImage: "paperplane.fill", tint: MacClipperTheme.cyan) { [weak self] in
                     self?.uploadClipToDiscord(clipURL, sourceApp: sourceApp)
                 }
             )
@@ -1583,17 +2196,40 @@ final class AppModel: ObservableObject {
         return actions
     }
 
+    func copyClipToClipboard(_ clipURL: URL) {
+        NSPasteboard.general.clearContents()
+
+        if NSPasteboard.general.writeObjects([clipURL as NSURL]) {
+            statusText = "Copied clip to clipboard"
+        } else {
+            NSPasteboard.general.setString(clipURL.path, forType: .string)
+            statusText = "Copied clip path"
+        }
+    }
+
+    func presentClipSharePanel(for clip: SavedClip) {
+        selectedClip = clip
+        presentSharePanel(for: clip.url, sourceApp: clip.sourceApp)
+    }
+
+    func uploadClipToCloud(_ clip: SavedClip) {
+        selectedClip = clip
+        uploadClipToCloudDirectly(clip.url, sourceApp: clip.sourceApp)
+    }
+
     private func presentSharePanel(for clipURL: URL, sourceApp: ClipSourceApp?) {
         ClipSharePanelManager.shared.show(
             clipURL: clipURL,
             discordConnected: hasDiscordWebhookConfigured,
-            cloudConnected: isCloudConnected,
+            onCloud: { [weak self] in
+                self?.uploadClipToCloudDirectly(clipURL, sourceApp: sourceApp)
+            },
             onDiscordChannel: { [weak self] in
                 guard let self else { return }
                 if self.hasDiscordWebhookConfigured {
                     self.uploadClipToDiscord(clipURL, sourceApp: sourceApp, mode: .channelUpload)
                 } else {
-                    self.showDiscordWebhookSetupGuide()
+                    self.showPublicPostingUnavailableNotice()
                 }
             },
             onDiscordDM: { [weak self] in
@@ -1601,18 +2237,139 @@ final class AppModel: ObservableObject {
                 if self.hasDiscordWebhookConfigured {
                     self.uploadClipToDiscord(clipURL, sourceApp: sourceApp, mode: .directMessageHandoff)
                 } else {
-                    self.showDiscordWebhookSetupGuide()
+                    self.showPublicPostingUnavailableNotice()
                 }
             },
-            onCloudUpload: { [weak self] in
-                guard let self else { return }
-                if self.isCloudConnected {
-                    self.uploadClipToSupabase(clipURL, sourceApp: sourceApp)
-                } else {
-                    self.openCloudConnectURL()
-                }
+            onOther: {
             }
         )
+    }
+
+    private func uploadClipToCloudDirectly(_ clipURL: URL, sourceApp: ClipSourceApp?) {
+        let clipPath = clipURL.path
+        let clipName = clipURL.deletingPathExtension().lastPathComponent
+        let linkedWebsiteUserID = FeatureActivationManager.normalizedUserID(websiteUserID)
+
+        guard !linkedWebsiteUserID.isEmpty else {
+            statusText = "Link MacClipper to the website before using Cloud"
+            cloudShareStatus = CloudShareStatusSummary(
+                clipPath: clipPath,
+                clipName: clipName,
+                startedAt: Date(),
+                state: .needsWebsiteLink
+            )
+            log("cloud upload redirected for linking file=\(clipURL.lastPathComponent)")
+            openCloudConnectURL()
+            return
+        }
+
+        guard activeCloudUploadPaths.insert(clipURL.path).inserted else {
+            statusText = "Cloud upload already in progress"
+            log("cloud upload ignored duplicate file=\(clipURL.lastPathComponent)")
+            return
+        }
+
+        statusText = "Creating cloud link…"
+        log("cloud upload requested file=\(clipURL.lastPathComponent) linkedWebsiteUserID=\(linkedWebsiteUserID.isEmpty ? "none" : linkedWebsiteUserID)")
+        cloudShareStatus = CloudShareStatusSummary(
+            clipPath: clipPath,
+            clipName: clipName,
+            startedAt: Date(),
+            state: .processing
+        )
+
+        let clipCloudShareClient = self.clipCloudShareClient
+        let appUUID = self.appUUID
+        let orientation = Self.inferredClipOrientation(for: clipURL)
+
+        Task.detached(priority: .userInitiated) { [clipURL, clipPath, clipName, sourceApp, clipCloudShareClient, appUUID, orientation, linkedWebsiteUserID] in
+            do {
+                let sharedURL = try await clipCloudShareClient.uploadClip(
+                    fileURL: clipURL,
+                    clipName: clipName,
+                    orientation: orientation,
+                    appUUID: appUUID,
+                    websiteUserID: linkedWebsiteUserID.isEmpty ? nil : linkedWebsiteUserID
+                )
+
+                await MainActor.run { [weak self] in
+                    guard let self else { return }
+                    self.activeCloudUploadPaths.remove(clipPath)
+                    self.uploadedClipURLs.insert(clipPath)
+                    self.savePreferences()
+                    self.reloadClips()
+                    self.statusText = "Uploaded \(clipURL.lastPathComponent) to MacClipper Cloud"
+                    self.log("cloud upload succeeded file=\(clipURL.lastPathComponent) uploadedURL=\(sharedURL.absoluteString)")
+                    Task { @MainActor [weak self] in
+                        guard let self else { return }
+                        await self.completeCloudShareStatusAfterMinimumDelay(
+                            for: clipPath,
+                            clipName: clipName,
+                            state: .uploaded(sharedURL: sharedURL)
+                        )
+                        self.presentCloudShareSuccessPrompt(for: sharedURL, clipName: clipName)
+                    }
+                }
+            } catch {
+                let errorMessage = error.localizedDescription
+                await MainActor.run { [weak self] in
+                    guard let self else { return }
+                    self.activeCloudUploadPaths.remove(clipPath)
+                    self.statusText = errorMessage
+                    self.log("cloud upload failed file=\(clipURL.lastPathComponent) message=\(errorMessage)")
+                    Task { @MainActor [weak self] in
+                        guard let self else { return }
+                        await self.completeCloudShareStatusAfterMinimumDelay(
+                            for: clipPath,
+                            clipName: clipName,
+                            state: .failed(message: errorMessage)
+                        )
+                    }
+                    ClipCloudUploadPanelManager.shared.showFailure(clipName: clipName, message: errorMessage)
+                    self.postClipFailedNotification(
+                        sourceApp: sourceApp,
+                        title: "Cloud upload failed",
+                        message: errorMessage
+                    )
+                }
+            }
+        }
+    }
+
+    @MainActor
+    private func completeCloudShareStatusAfterMinimumDelay(
+        for clipPath: String,
+        clipName: String,
+        state: CloudShareStatusSummary.State
+    ) async {
+        let minimumDuration: TimeInterval = 3
+        let startedAt = cloudShareStatus?.clipPath == clipPath
+            ? (cloudShareStatus?.startedAt ?? Date())
+            : Date()
+        let elapsed = Date().timeIntervalSince(startedAt)
+
+        if elapsed < minimumDuration {
+            try? await Task.sleep(nanoseconds: UInt64((minimumDuration - elapsed) * 1_000_000_000))
+        }
+
+        guard cloudShareStatus?.clipPath == clipPath else {
+            return
+        }
+
+        cloudShareStatus = CloudShareStatusSummary(
+            clipPath: clipPath,
+            clipName: clipName,
+            startedAt: startedAt,
+            state: state
+        )
+    }
+
+    func clearCloudShareStatus(for clip: SavedClip) {
+        guard cloudShareStatus?.clipPath == clip.url.path else {
+            return
+        }
+
+        cloudShareStatus = nil
     }
 
     private func uploadClipToDiscord(_ clipURL: URL, sourceApp: ClipSourceApp?, mode: DiscordShareMode = .channelUpload) {
@@ -1620,8 +2377,8 @@ final class AppModel: ObservableObject {
         guard !webhookURL.isEmpty else {
             postClipFailedNotification(
                 sourceApp: sourceApp,
-                title: "Discord not connected",
-                message: "Add a Discord webhook URL in Settings before sending clips there."
+                title: "Public posting unavailable",
+                message: "This build is missing its locked online post target."
             )
             return
         }
@@ -1631,7 +2388,7 @@ final class AppModel: ObservableObject {
             return
         }
 
-        statusText = "Uploading clip to Discord…"
+        statusText = "Posting clip online…"
         let modeLabel = mode == .directMessageHandoff ? "dm" : "channel"
         log("discord upload requested file=\(clipURL.lastPathComponent) mode=\(modeLabel)")
 
@@ -1647,14 +2404,14 @@ final class AppModel: ObservableObject {
                 )
                 if mode == .directMessageHandoff {
                     if let uploadedURL {
-                        self.copyToPasteboard(uploadedURL.absoluteString, statusMessage: "Copied Discord link")
+                        self.copyToPasteboard(uploadedURL.absoluteString, statusMessage: "Copied post link")
                     }
                     self.openDiscord()
                     self.statusText = uploadedURL == nil
-                        ? "Opened Discord after upload"
-                        : "Copied Discord link and opened Discord"
+                        ? "Opened Discord after posting"
+                        : "Copied post link and opened Discord"
                 } else {
-                    self.statusText = "Uploaded \(clipURL.lastPathComponent) to Discord"
+                    self.statusText = "Posted \(clipURL.lastPathComponent) online"
                 }
 
                 self.postDiscordUploadSuccessNotification(
@@ -1669,11 +2426,15 @@ final class AppModel: ObservableObject {
                 self.log("discord upload failed file=\(clipURL.lastPathComponent) mode=\(modeLabel) message=\(error.localizedDescription)")
                 self.postClipFailedNotification(
                     sourceApp: sourceApp,
-                    title: "Discord upload failed",
+                    title: "Public post failed",
                     message: error.localizedDescription
                 )
             }
         }
+    }
+
+    private func presentCloudShareSuccessPrompt(for sharedURL: URL, clipName: String) {
+        statusText = "Clouded \(clipName)"
     }
 
     private func discordUploadMessage(for clipURL: URL, sourceApp: ClipSourceApp?) -> String {
@@ -1682,85 +2443,99 @@ final class AppModel: ObservableObject {
     }
 
     func uploadClipToBase44(_ clipURL: URL, sourceApp: ClipSourceApp?) {
-        uploadClipToSupabase(clipURL, sourceApp: sourceApp)
+        // uploadClipToSupabase(clipURL, sourceApp: sourceApp)
     }
 
-    func uploadClipToSupabase(_ clipURL: URL, sourceApp: ClipSourceApp?) {
-        guard activeDiscordUploadPaths.insert(clipURL.path).inserted else {
-            statusText = "Upload already in progress"
-            return
+    nonisolated private static func inferredClipOrientation(for clipURL: URL) -> MiniCutExportOrientation {
+        let asset = AVURLAsset(url: clipURL)
+        guard let videoTrack = asset.tracks(withMediaType: .video).first else {
+            return .horizontal
         }
 
-        statusText = "Uploading clip to Supabase…"
-        log("supabase upload requested file=\(clipURL.lastPathComponent)")
+        let orientedRect = CGRect(origin: .zero, size: videoTrack.naturalSize)
+            .applying(videoTrack.preferredTransform)
+        let orientedSize = CGSize(width: abs(orientedRect.width), height: abs(orientedRect.height))
 
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-            defer { self.activeDiscordUploadPaths.remove(clipURL.path) }
-
-            do {
-                let fileData = try Data(contentsOf: clipURL)
-                let filename = clipURL.lastPathComponent
-                let userId = "user-id" // Get from auth, for now placeholder
-
-                let filePath = "\(userId)/\(filename)"
-
-                // Upload to Supabase Storage
-                let storage = self.supabase.storage.from("clips")
-                _ = try await storage.upload(
-                    path: filePath,
-                    file: fileData,
-                    options: FileOptions(
-                        contentType: "video/mp4",
-                        upsert: false
-                    )
-                )
-
-                // Get public URL
-                let publicURL = try await storage.getPublicURL(path: filePath)
-
-                // Save to database
-                struct ClipRecord: Encodable {
-                    let content: String
-                    let user_id: String
-                }
-                let clip = ClipRecord(content: publicURL.absoluteString, user_id: userId)
-
-                _ = try await self.supabase
-                    .from("clips")
-                    .insert(clip)
-
-                self.uploadedClipURLs.insert(clipURL.path)
-                self.statusText = "Uploaded \(clipURL.lastPathComponent) to Supabase"
-                self.log("supabase upload succeeded file=\(clipURL.lastPathComponent)")
-                self.copyToPasteboard(publicURL.absoluteString, statusMessage: "Copied Supabase link")
-
-            } catch {
-                self.statusText = error.localizedDescription
-                self.log("supabase upload failed file=\(clipURL.lastPathComponent) message=\(error.localizedDescription)")
-                self.postClipFailedNotification(
-                    sourceApp: sourceApp,
-                    title: "Supabase upload failed",
-                    message: error.localizedDescription
-                )
-            }
-        }
+        return orientedSize.height > orientedSize.width ? .vertical : .horizontal
     }
+
+    // func uploadClipToSupabase(_ clipURL: URL, sourceApp: ClipSourceApp?) {
+    //     guard activeDiscordUploadPaths.insert(clipURL.path).inserted else {
+    //         statusText = "Upload already in progress"
+    //         return
+    //     }
+    //
+    //     statusText = "Uploading clip to Supabase…"
+    //     log("supabase upload requested file=\(clipURL.lastPathComponent)")
+    //
+    //     Task { @MainActor [weak self] in
+    //         guard let self else { return }
+    //         defer { self.activeDiscordUploadPaths.remove(clipURL.path) }
+    //
+    //         do {
+    //             let fileData = try Data(contentsOf: clipURL)
+    //             let filename = clipURL.lastPathComponent
+    //             let userId = "user-id" // Get from auth, for now placeholder
+    //
+    //             let filePath = "\(userId)/\(filename)"
+    //
+    //             // Upload to Supabase Storage
+    //             let storage = self.supabase.storage.from("clips")
+    //             _ = try await storage.upload(
+    //                 path: filePath,
+    //                 file: fileData,
+    //                 options: FileOptions(
+    //                     contentType: "video/mp4",
+    //                     upsert: false
+    //                 )
+    //             )
+    //
+    //             // Get public URL
+    //             let publicURL = try await storage.getPublicURL(path: filePath)
+    //
+    //             // Save to database
+    //             struct ClipRecord: Encodable {
+    //                 let content: String
+    //                 let user_id: String
+    //             }
+    //             let clip = ClipRecord(content: publicURL.absoluteString, user_id: userId)
+    //
+    //             _ = try await self.supabase
+    //                 .from("clips")
+    //                 .insert(clip)
+    //
+    //             self.uploadedClipURLs.insert(clipURL.path)
+    //             self.statusText = "Uploaded \(clipURL.lastPathComponent) to Supabase"
+    //             self.log("supabase upload succeeded file=\(clipURL.lastPathComponent)")
+    //             self.copyToPasteboard(publicURL.absoluteString, statusMessage: "Copied Supabase link")
+    //
+    //         } catch {
+    //             self.statusText = error.localizedDescription
+    //             self.log("supabase upload failed file=\(clipURL.lastPathComponent) message=\(error.localizedDescription)")
+    //             self.postClipFailedNotification(
+    //                 sourceApp: sourceApp,
+    //                 title: "Supabase upload failed",
+    //                 message: error.localizedDescription
+    //             )
+    //         }
+    //     }
+    // }
 
     private func postDiscordConnectionSuccessNotification() {
         if enableGameNotifications {
             GameNotificationManager.shared.show(
-                title: "Discord channel connected",
-                message: "MacClipper can now send clips to your configured Discord webhook channel.",
+                title: "Public posting is ready",
+                message: "MacClipper can now send clips to the locked online feed in this build.",
                 sourceApp: nil
             )
             return
         }
 
         let content = UNMutableNotificationContent()
-        content.title = "Discord channel connected"
-        content.body = "MacClipper can now send clips to your configured Discord webhook channel."
+        content.title = "Public posting is ready"
+        content.body = "MacClipper can now send clips to the locked online feed in this build."
         content.sound = .default
+        decorateSystemNotificationContent(content)
 
         let request = UNNotificationRequest(
             identifier: "discord-connected-\(UUID().uuidString)",
@@ -1786,15 +2561,15 @@ final class AppModel: ObservableObject {
 
         switch mode {
         case .channelUpload:
-            title = "Sent to Discord"
+            title = "Posted Online"
             message = uploadedURL == nil
-                ? "Uploaded to your connected Discord channel."
-                : "Uploaded to Discord. You can also copy the hosted link."
+                ? "Sent to your locked public feed."
+                : "Posted online. The hosted clip link is ready too."
         case .directMessageHandoff:
-            title = "Ready for Discord DM"
+            title = "Posted + Opened Discord"
             message = uploadedURL == nil
-                ? "Uploaded to your Discord channel and opened Discord. Forward it from the channel if needed."
-                : "Uploaded to your Discord channel, copied the hosted link, and opened Discord so you can paste it into any DM."
+                ? "Posted online and opened Discord so you can forward it anywhere."
+                : "Posted online, copied the hosted link, and opened Discord so you can drop it anywhere."
         }
 
         if enableGameNotifications {
@@ -1834,6 +2609,7 @@ final class AppModel: ObservableObject {
         content.title = title
         content.body = message
         content.sound = .default
+        decorateSystemNotificationContent(content)
 
         let request = UNNotificationRequest(
             identifier: "discord-upload-\(UUID().uuidString)",
@@ -1848,7 +2624,7 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private func copyToPasteboard(_ value: String, statusMessage: String = "Copied Discord link") {
+    private func copyToPasteboard(_ value: String, statusMessage: String = "Copied clip link") {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(value, forType: .string)
         statusText = statusMessage
@@ -1904,6 +2680,7 @@ final class AppModel: ObservableObject {
         content.title = title
         content.body = message
         content.sound = .default
+        decorateSystemNotificationContent(content)
 
         let request = UNNotificationRequest(
             identifier: "clip-failed-\(UUID().uuidString)",
@@ -1944,6 +2721,7 @@ final class AppModel: ObservableObject {
         content.title = title
         content.body = message
         content.sound = .default
+        decorateSystemNotificationContent(content)
 
         let request = UNNotificationRequest(
             identifier: "buffer-warmup-\(UUID().uuidString)",
@@ -1976,12 +2754,17 @@ final class AppModel: ObservableObject {
         }
     }
 
+    private func decorateSystemNotificationContent(_ content: UNMutableNotificationContent) {
+        if let appIconAttachment = MacClipperIconAsset.notificationAttachment() {
+            content.attachments = [appIconAttachment]
+        }
+    }
+
     private func insertSavedClipIntoLibrary(_ clipURL: URL, sourceApp: ClipSourceApp?, capturedAt: Date) {
         guard let savedClip = ClipLibraryLoader.makeSavedClip(
             from: clipURL,
             fallbackCreatedAt: capturedAt,
-            sourceAppOverride: sourceApp,
-            uploadedClipURLs: uploadedClipURLs
+            sourceApp: sourceApp
         ) else {
             reloadClips()
             return
@@ -2086,6 +2869,15 @@ final class AppModel: ObservableObject {
             return
         }
 
+        if shouldPreventEchoBySuppressingMicrophone {
+            if !microphoneCaptureSuppressed {
+                statusText = "Loopback microphone + system audio can cause echo, so microphone capture was disabled automatically."
+            }
+            microphoneCaptureSuppressed = true
+            refreshVoiceCommandListenerState()
+            return
+        }
+
         let authorizationStatus = AVCaptureDevice.authorizationStatus(for: .audio)
         microphoneCaptureSuppressed = authorizationStatus != .authorized && microphoneCaptureSuppressed
 
@@ -2099,7 +2891,11 @@ final class AppModel: ObservableObject {
     private func refreshVoiceCommandListenerState() {
         voiceCommandManager.setPreferredMicrophoneDeviceID(resolvedSelectedMicrophoneDeviceID)
         voiceCommandManager.setUsesExternalMicrophoneFeed(shouldUseRecorderMicrophoneFeedForVoiceCommands)
-        voiceCommandManager.start()
+        if isRecording || includeMicrophone {
+            voiceCommandManager.start()
+        } else {
+            voiceCommandManager.stop()
+        }
     }
 
     private func currentPersistedSettings() -> PersistedAppSettings {
@@ -2117,7 +2913,7 @@ final class AppModel: ObservableObject {
             videoQualityPreset: videoQualityPreset,
             appUUID: appUUID,
             websiteUserID: websiteUserID.isEmpty ? nil : websiteUserID,
-            unlockedPaidFeatures: FeatureActivationManager.normalizedFeatures(unlockedPaidFeatures),
+            unlockedPaidFeatures: [],
             shortcutKey: shortcutKey.isEmpty ? "9" : shortcutKey,
             useCommand: useCommand,
             useShift: useShift,
@@ -2130,7 +2926,11 @@ final class AppModel: ObservableObject {
             automaticallyChecksForUpdates: updater.automaticallyChecksForUpdates,
             checksForUpdatesOnLaunch: updater.checksForUpdatesOnLaunch,
             captureDeviceProfiles: captureDeviceProfiles,
-            uploadedClipURLs: Array(uploadedClipURLs)
+            uploadedClipURLs: Array(uploadedClipURLs),
+            hasCompletedOnboarding: hasCompletedOnboarding,
+            lastSeenLaunchSetupVersion: Self.normalizedLaunchSetupVersion(lastSeenLaunchSetupVersion),
+            hasAcknowledgedFourKProUnlock: hasAcknowledgedFourKProUnlock,
+            customVoiceCommandPhrase: customVoiceCommandPhrase
         )
     }
 
@@ -2166,7 +2966,7 @@ final class AppModel: ObservableObject {
                 videoQualityPreset: storedSettings.videoQualityPreset,
                 appUUID: resolvedAppUUID(storedSettings.appUUID),
                 websiteUserID: storedSettings.websiteUserID,
-                unlockedPaidFeatures: FeatureActivationManager.normalizedFeatures(storedSettings.unlockedPaidFeatures),
+                unlockedPaidFeatures: [],
                 shortcutKey: storedSettings.shortcutKey.isEmpty ? "9" : storedSettings.shortcutKey,
                 useCommand: storedSettings.useCommand,
                 useShift: storedSettings.useShift,
@@ -2178,7 +2978,11 @@ final class AppModel: ObservableObject {
                 automaticallyChecksForUpdates: storedSettings.automaticallyChecksForUpdates,
                 checksForUpdatesOnLaunch: storedSettings.checksForUpdatesOnLaunch ?? false,
                 captureDeviceProfiles: storedSettings.captureDeviceProfiles,
-                uploadedClipURLs: storedSettings.uploadedClipURLs
+                uploadedClipURLs: storedSettings.uploadedClipURLs,
+                hasCompletedOnboarding: storedSettings.hasCompletedOnboarding,
+                lastSeenLaunchSetupVersion: normalizedLaunchSetupVersion(storedSettings.lastSeenLaunchSetupVersion),
+                hasAcknowledgedFourKProUnlock: storedSettings.hasAcknowledgedFourKProUnlock,
+                customVoiceCommandPhrase: storedSettings.customVoiceCommandPhrase
             )
         }
 
@@ -2196,10 +3000,10 @@ final class AppModel: ObservableObject {
             showCursor: defaults.object(forKey: "showCursor") as? Bool ?? true,
             enableGameNotifications: defaults.object(forKey: "enableGameNotifications") as? Bool ?? true,
             captureResolutionPreset: CaptureResolutionPreset(rawValue: defaults.string(forKey: "captureResolutionPreset") ?? "automatic") ?? .automatic,
-            videoQualityPreset: VideoQualityPreset(rawValue: defaults.string(forKey: "videoQualityPreset") ?? "balanced") ?? .balanced,
+            videoQualityPreset: VideoQualityPreset(rawValue: defaults.string(forKey: "videoQualityPreset") ?? "performance") ?? .performance,
             appUUID: resolvedAppUUID(defaults.string(forKey: "appUUID")),
             websiteUserID: defaults.string(forKey: "websiteUserID"),
-            unlockedPaidFeatures: defaults.stringArray(forKey: "unlockedPaidFeatures") ?? [],
+            unlockedPaidFeatures: [],
             shortcutKey: defaults.string(forKey: "shortcutKey") ?? "9",
             useCommand: defaults.object(forKey: "useCommand") as? Bool ?? true,
             useShift: defaults.object(forKey: "useShift") as? Bool ?? true,
@@ -2211,7 +3015,11 @@ final class AppModel: ObservableObject {
             automaticallyChecksForUpdates: defaults.object(forKey: "automaticallyChecksForUpdates") as? Bool ?? true,
             checksForUpdatesOnLaunch: defaults.object(forKey: "checksForUpdatesOnLaunch") as? Bool ?? false,
             captureDeviceProfiles: loadCaptureDeviceProfiles(from: defaults),
-            uploadedClipURLs: []
+            uploadedClipURLs: [],
+            hasCompletedOnboarding: false,
+            lastSeenLaunchSetupVersion: nil,
+            hasAcknowledgedFourKProUnlock: nil,
+            customVoiceCommandPhrase: nil
         )
 
         settingsStore.saveSettings(migratedSettings)
