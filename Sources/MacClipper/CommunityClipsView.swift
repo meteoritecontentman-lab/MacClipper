@@ -211,20 +211,7 @@ struct CommunityClipsView: View {
                 .lineLimit(2)
 
             HStack(spacing: 4) {
-                if let avatarURL = profile?.avatar_url, let url = URL(string: avatarURL) {
-                    AsyncImage(url: url) { phase in
-                        if let image = phase.image {
-                            image
-                                .resizable()
-                                .frame(width: 14, height: 14)
-                                .clipShape(Circle())
-                        } else {
-                            defaultPFP
-                        }
-                    }
-                } else {
-                    defaultPFP
-                }
+                profileAvatar(profile: profile, clip: clip)
                 Text(profile?.display_name ?? displayNameFallback(for: clip))
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundStyle(SlateTheme.textSecondary)
@@ -256,6 +243,47 @@ struct CommunityClipsView: View {
             }
         }
         .padding(8)
+    }
+
+    private func profileAvatar(profile: CommunityProfile?, clip: CommunityClip) -> some View {
+        ZStack(alignment: .bottomTrailing) {
+            if let avatarURL = profile?.avatar_url, let url = URL(string: avatarURL) {
+                AsyncImage(url: url) { phase in
+                    if let image = phase.image {
+                        image
+                            .resizable()
+                            .frame(width: 14, height: 14)
+                            .clipShape(Circle())
+                    } else {
+                        defaultPFP
+                    }
+                }
+            } else {
+                defaultPFP
+            }
+            if let status = profile?.status, status != .offline {
+                statusDot(for: status)
+            }
+        }
+    }
+
+    private func statusDot(for status: UserStatus) -> some View {
+        Circle()
+            .fill(statusDotColor(status))
+            .frame(width: 6, height: 6)
+            .overlay(
+                Circle()
+                    .stroke(SlateTheme.panel, lineWidth: 1)
+            )
+    }
+
+    private func statusDotColor(_ status: UserStatus) -> Color {
+        switch status {
+        case .online: return Color.green
+        case .idle: return Color.yellow
+        case .dnd: return Color.red
+        case .offline: return Color.gray
+        }
     }
 
     private var defaultPFP: some View {

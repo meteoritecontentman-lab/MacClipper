@@ -260,6 +260,7 @@ final class AppModel: ObservableObject {
     @Published var diagnosticsLogText: String = ""
     @Published var diagnosticsLogStatusText: String = "Refresh to load the latest diagnostics log."
     @Published var isCloudConnected: Bool = false
+    @Published var userStatus: UserStatus = .offline
     @Published var uploadedClipURLs: Set<String> = []
     @Published var cloudShareStatus: CloudShareStatusSummary?
     @Published var hasCompletedOnboarding: Bool
@@ -355,6 +356,7 @@ final class AppModel: ObservableObject {
         customVoiceCommandPhrase = persistedSettings.customVoiceCommandPhrase
         shouldShowLaunchSetup = Self.shouldPresentLaunchSetup(lastSeenVersion: lastSeenLaunchSetupVersion)
         isCloudConnected = !base44Token.isEmpty || !websiteUserID.isEmpty
+        userStatus = persistedSettings.userStatus ?? .offline
         uploadedClipURLs = Set(persistedSettings.uploadedClipURLs)
         captureDeviceProfiles = persistedSettings.captureDeviceProfiles
 
@@ -1306,6 +1308,77 @@ final class AppModel: ObservableObject {
     }
 
     // func copyWebsiteUserID removed
+
+    func developerGrantPro(appUuid: String) {
+        guard isDeveloperBuild, !developerAccessToken.isEmpty else { return }
+        Task {
+            guard let apiBaseURL = Self.accountServiceAPIBaseURL() else { return }
+            do {
+                try await DeveloperAdminClient.grantFeature(apiBaseURL: apiBaseURL, accessToken: developerAccessToken, appUuid: appUuid)
+                await reloadDeveloperInstallations()
+                postFeatureEntitlementNotification(title: "Pro Granted", message: "Pro has been granted to \(appUuid.prefix(8))…", tone: .celebratory)
+            } catch {
+                developerStatusText = error.localizedDescription
+            }
+        }
+    }
+
+    func developerRevokePro(appUuid: String) {
+        guard isDeveloperBuild, !developerAccessToken.isEmpty else { return }
+        Task {
+            guard let apiBaseURL = Self.accountServiceAPIBaseURL() else { return }
+            do {
+                try await DeveloperAdminClient.revokeFeature(apiBaseURL: apiBaseURL, accessToken: developerAccessToken, appUuid: appUuid)
+                await reloadDeveloperInstallations()
+                postFeatureEntitlementNotification(title: "Pro Revoked", message: "Pro revoked for \(appUuid.prefix(8))…", tone: .warning)
+            } catch {
+                developerStatusText = error.localizedDescription
+            }
+        }
+    }
+
+    func developerEnsureOwnerPro(appUuid: String) {
+        guard isDeveloperBuild, !developerAccessToken.isEmpty else { return }
+        Task {
+            guard let apiBaseURL = Self.accountServiceAPIBaseURL() else { return }
+            do {
+                try await DeveloperAdminClient.ensureOwnerPro(apiBaseURL: apiBaseURL, accessToken: developerAccessToken, appUuid: appUuid)
+                await reloadDeveloperInstallations()
+                postFeatureEntitlementNotification(title: "Owner Pro Active", message: "Owner Pro entitlement synced.", tone: .success)
+            } catch {
+                developerStatusText = error.localizedDescription
+            }
+        }
+    }
+
+    func developerSendEmail(recipients: DeveloperAdminClient.EitherAllOrEmails, subject: String, htmlBody: String, textBody: String?, images: [DeveloperAdminClient.EmailImage]) {
+        guard isDeveloperBuild, !developerAccessToken.isEmpty else { return }
+        Task {
+            guard let apiBaseURL = Self.accountServiceAPIBaseURL() else {
+                await MainActor.run { developerStatusText = "Could not build API URL." }
+                return
+            }
+            do {
+                let result = try await DeveloperAdminClient.sendEmail(
+                    apiBaseURL: apiBaseURL,
+                    accessToken: developerAccessToken,
+                    recipients: recipients,
+                    subject: subject,
+                    htmlBody: htmlBody,
+                    textBody: textBody,
+                    images: images
+                )
+                await MainActor.run {
+                    developerStatusText = "Email sent: \(result.sent) ok, \(result.failed) failed"
+                    if !result.errors.isEmpty {
+                        developerStatusText += ". Errors: \(result.errors.joined(separator: "; "))"
+                    }
+                }
+            } catch {
+                await MainActor.run { developerStatusText = error.localizedDescription }
+            }
+        }
+    }
 
     func reloadClips() {
         let folderURL = URL(fileURLWithPath: saveDirectoryPath, isDirectory: true)
@@ -2976,7 +3049,8 @@ final class AppModel: ObservableObject {
             hasCompletedOnboarding: hasCompletedOnboarding,
             lastSeenLaunchSetupVersion: Self.normalizedLaunchSetupVersion(lastSeenLaunchSetupVersion),
             hasAcknowledgedFourKProUnlock: hasAcknowledgedFourKProUnlock,
-            customVoiceCommandPhrase: customVoiceCommandPhrase
+            customVoiceCommandPhrase: customVoiceCommandPhrase,
+            userStatus: userStatus
         )
     }
 
@@ -3028,7 +3102,8 @@ final class AppModel: ObservableObject {
                 hasCompletedOnboarding: storedSettings.hasCompletedOnboarding,
                 lastSeenLaunchSetupVersion: normalizedLaunchSetupVersion(storedSettings.lastSeenLaunchSetupVersion),
                 hasAcknowledgedFourKProUnlock: storedSettings.hasAcknowledgedFourKProUnlock,
-                customVoiceCommandPhrase: storedSettings.customVoiceCommandPhrase
+                customVoiceCommandPhrase: storedSettings.customVoiceCommandPhrase,
+                userStatus: storedSettings.userStatus
             )
         }
 
@@ -3065,7 +3140,8 @@ final class AppModel: ObservableObject {
             hasCompletedOnboarding: false,
             lastSeenLaunchSetupVersion: nil,
             hasAcknowledgedFourKProUnlock: nil,
-            customVoiceCommandPhrase: nil
+            customVoiceCommandPhrase: nil,
+            userStatus: nil
         )
 
         settingsStore.saveSettings(migratedSettings)

@@ -8,7 +8,9 @@ import {
   smtpPass,
   smtpPort,
   smtpSecure,
-  smtpUser
+  smtpUser,
+  supabaseServiceRoleKey,
+  supabaseURL
 } from "../config";
 
 let mailTransporter: nodemailer.Transporter | null = null;
@@ -246,4 +248,67 @@ export async function sendOrderConfirmationEmail(input: {
     console.error(`[EMAIL] Send failed for orderId=${orderId}: ${errorMsg}`, error);
     return { sent: false, reason: `smtp-error: ${errorMsg}` };
   }
+}
+
+export async function sendBulkEmail(input: {
+  recipients: "all" | string[];
+  subject: string;
+  htmlBody: string;
+  textBody?: string;
+  images?: Array<{ filename: string; contentBase64: string; cid: string }>;
+}): Promise<{ sent: number; failed: number; errors: string[] }> {
+  if (!hasSmtpConfig()) {
+    throw new Error("SMTP not configured");
+  }
+
+  let recipientEmails: string[];
+  if (input.recipients === "all") {
+    const serviceRoleKey = supabaseServiceRoleKey();
+    if (!serviceRoleKey) throw new Error("Service role key required for fetching users");
+
+    const res = await fetch(`${supabaseURL()}/auth/v1/admin/users?per_page=10000`, {
+      headers: {
+        apikey: serviceRoleKey,
+        Authorization: `Bearer ${serviceRoleKey}`,
+      },
+    });
+    if (!res.ok) throw new Error(`Supabase auth API error: ${res.status}`);
+    const data = await res.json() as { users?: Array<{ email?: string }> };
+    recipientEmails = (data.users || [])
+      .map((u) => (u.email || "").toLowerCase().trim())
+      .filter(Boolean);
+  } else {
+    recipientEmails = input.recipients.map((e) => e.toLowerCase().trim()).filter(Boolean);
+  }
+
+  const from = billingEmailFrom();
+  const transporter = getTransporter();
+  const attachments = (input.images || []).map((img) => ({
+    filename: img.filename,
+    content: Buffer.from(img.contentBase64, "base64"),
+    cid: img.cid,
+  }));
+
+  let sent = 0;
+  let failed = 0;
+  const errors: string[] = [];
+
+  for (const email of recipientEmails) {
+    try {
+      await transporter.sendMail({
+        from,
+        to: email,
+        subject: input.subject,
+        text: input.textBody || "",
+        html: input.htmlBody,
+        attachments: attachments.length > 0 ? attachments : undefined,
+      });
+      sent++;
+    } catch (error) {
+      failed++;
+      errors.push(`${email}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  return { sent, failed, errors };
 }

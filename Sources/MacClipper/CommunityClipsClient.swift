@@ -91,6 +91,26 @@ actor CommunityClipsClient {
         return try decoder.decode([ClipComment].self, from: data)
     }
 
+    func updateProfileStatus(profileID: String, status: UserStatus) async throws {
+        var components = URLComponents(string: "\(supabaseURL)/rest/v1/rpc/update_my_status")!
+        var request = URLRequest(url: components.url!)
+        request.httpMethod = "POST"
+        request.allHTTPHeaderFields = baseHeaders
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let bodyDict: [String: Any] = [
+            "p_profile_id": profileID,
+            "p_status": status.rawValue
+        ]
+        request.httpBody = try JSONSerialization.data(withJSONObject: bodyDict)
+        request.timeoutInterval = 10
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse, (200..<300).contains(httpResponse.statusCode) else {
+            let body = String(data: data, encoding: .utf8) ?? "unknown"
+            throw StatusError.updateFailed(body)
+        }
+    }
+
     func insertComment(clipID: Int, userID: String, commenterName: String, body: String) async throws {
         var request = URLRequest(url: URL(string: "\(supabaseURL)/rest/v1/rpc/insert_clip_comment")!)
         request.httpMethod = "POST"
@@ -114,4 +134,14 @@ actor CommunityClipsClient {
 
 enum CommentError: LocalizedError {
     case insertFailed
+}
+
+enum StatusError: LocalizedError {
+    case updateFailed(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .updateFailed(let detail): return "Failed to update status: \(detail)"
+        }
+    }
 }

@@ -118,7 +118,7 @@ enum DeveloperAdminClient {
         apiBaseURL: URL,
         accessToken: String,
         path: String,
-        jsonObject: [String: String]
+        jsonObject: [String: Any]
     ) throws -> URLRequest {
         var request = try authorizedRequest(apiBaseURL: apiBaseURL, accessToken: accessToken, path: path, method: "POST")
         request.httpBody = try JSONSerialization.data(withJSONObject: jsonObject)
@@ -138,6 +138,79 @@ enum DeveloperAdminClient {
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.timeoutInterval = 10
         return request
+    }
+
+    static func grantFeature(apiBaseURL: URL, accessToken: String, appUuid: String, feature: String = "4k-pro") async throws {
+        let body = ["appUuid": appUuid, "feature": feature]
+        let request = try authorizedJSONRequest(apiBaseURL: apiBaseURL, accessToken: accessToken, path: "bot/users/grant-feature", jsonObject: body)
+        let _: EmptyResponse = try await perform(request)
+    }
+
+    static func revokeFeature(apiBaseURL: URL, accessToken: String, appUuid: String, feature: String = "4k-pro") async throws {
+        let body = ["appUuid": appUuid, "feature": feature]
+        let request = try authorizedJSONRequest(apiBaseURL: apiBaseURL, accessToken: accessToken, path: "bot/users/revoke-feature", jsonObject: body)
+        let _: EmptyResponse = try await perform(request)
+    }
+
+    static func ensureOwnerPro(apiBaseURL: URL, accessToken: String, appUuid: String) async throws {
+        let body = ["appUuid": appUuid]
+        let request = try authorizedJSONRequest(apiBaseURL: apiBaseURL, accessToken: accessToken, path: "bot/users/ensure-owner-pro", jsonObject: body)
+        let _: EmptyResponse = try await perform(request)
+    }
+
+    struct EmailImage: Encodable {
+        let filename: String
+        let contentBase64: String
+        let cid: String
+    }
+
+    struct EmailSendResult: Decodable {
+        let sent: Int
+        let failed: Int
+        let errors: [String]
+    }
+
+    static func sendEmail(
+        apiBaseURL: URL,
+        accessToken: String,
+        recipients: EitherAllOrEmails,
+        subject: String,
+        htmlBody: String,
+        textBody: String? = nil,
+        images: [EmailImage] = []
+    ) async throws -> EmailSendResult {
+        var body: [String: Any] = [
+            "recipients": recipients.encoded,
+            "subject": subject,
+            "htmlBody": htmlBody,
+        ]
+        if let textBody {
+            body["textBody"] = textBody
+        }
+        if !images.isEmpty {
+            let encoders = images.map { img -> [String: String] in
+                ["filename": img.filename, "contentBase64": img.contentBase64, "cid": img.cid]
+            }
+            body["images"] = encoders
+        }
+
+        var request = try authorizedRequest(apiBaseURL: apiBaseURL, accessToken: accessToken, path: "bot/email/send", method: "POST")
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        return try await perform(request)
+    }
+
+    enum EitherAllOrEmails {
+        case all
+        case specific([String])
+
+        var encoded: Any {
+            switch self {
+            case .all: return "all"
+            case .specific(let emails): return emails
+            }
+        }
     }
 
     private static func perform<Response: Decodable>(_ request: URLRequest) async throws -> Response {
@@ -161,3 +234,5 @@ enum DeveloperAdminClient {
         }
     }
 }
+
+private struct EmptyResponse: Decodable {}

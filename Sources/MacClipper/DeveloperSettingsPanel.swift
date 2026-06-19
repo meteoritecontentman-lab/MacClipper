@@ -113,7 +113,251 @@ struct DeveloperSettingsPanel: View {
                     }
                 }
             }
+
+            DeveloperEmailComposer(density: density)
+                .environmentObject(model)
         }
+    }
+}
+
+private struct DeveloperEmailComposer: View {
+    @EnvironmentObject private var model: AppModel
+    let density: SlateDensity
+
+    @State private var isExpanded = false
+    @State private var subject = ""
+    @State private var htmlBody = ""
+    @State private var textBody = ""
+    @State private var recipientMode: RecipientMode = .all
+    @State private var customEmails = ""
+    @State private var attachedImages: [AttachedImage] = []
+    @State private var isSending = false
+
+    private enum RecipientMode: String, CaseIterable, Identifiable {
+        case all = "All Users"
+        case custom = "Specific Emails"
+        var id: String { rawValue }
+    }
+
+    private struct AttachedImage: Identifiable {
+        let id = UUID()
+        let url: URL
+        let cid: String
+        var data: Data?
+        var filename: String { url.lastPathComponent }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            SlatePanelDivider()
+            Button {
+                withAnimation { isExpanded.toggle() }
+            } label: {
+                HStack {
+                    SlateSectionCaption(title: "Email Composer", density: density)
+                    Spacer()
+                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(SlateTheme.textTertiary)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if isExpanded {
+                VStack(alignment: .leading, spacing: 8) {
+                    SlateFieldChrome {
+                        TextField("Subject", text: $subject)
+                            .textFieldStyle(.plain)
+                            .font(.system(size: density == .compact ? 11 : 13, weight: .semibold))
+                            .foregroundStyle(SlateTheme.textPrimary)
+                    }
+
+                    SlateFieldChrome {
+                        Picker("Recipients", selection: $recipientMode) {
+                            ForEach(RecipientMode.allCases) { mode in
+                                Text(mode.rawValue).tag(mode)
+                            }
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.segmented)
+                    }
+
+                    if recipientMode == .custom {
+                        SlateFieldChrome {
+                            TextField("Emails (comma separated)", text: $customEmails)
+                                .textFieldStyle(.plain)
+                                .font(.system(size: density == .compact ? 10 : 12, weight: .medium, design: .monospaced))
+                                .foregroundStyle(SlateTheme.textPrimary)
+                        }
+                    }
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("HTML Body")
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundStyle(SlateTheme.textSecondary)
+                        SlateFieldChrome {
+                            ScrollView {
+                                TextEditor(text: $htmlBody)
+                                    .font(.system(size: density == .compact ? 10 : 11, weight: .medium, design: .monospaced))
+                                    .foregroundStyle(SlateTheme.textPrimary)
+                                    .frame(minHeight: 120)
+                                    .scrollContentBackground(.hidden)
+                            }
+                        }
+                    }
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Text Body (fallback)")
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundStyle(SlateTheme.textSecondary)
+                        SlateFieldChrome {
+                            ScrollView {
+                                TextEditor(text: $textBody)
+                                    .font(.system(size: density == .compact ? 10 : 11, weight: .medium, design: .monospaced))
+                                    .foregroundStyle(SlateTheme.textPrimary)
+                                    .frame(minHeight: 60)
+                                    .scrollContentBackground(.hidden)
+                            }
+                        }
+                    }
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Attached Images")
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundStyle(SlateTheme.textSecondary)
+                        HStack(spacing: 6) {
+                            Button {
+                                pickImages()
+                            } label: {
+                                SlateCapsuleButtonLabel(
+                                    title: "Add Images",
+                                    systemImage: "photo.on.rectangle",
+                                    tint: SlateTheme.accent,
+                                    density: density
+                                )
+                            }
+                            .buttonStyle(.plain)
+
+                            if !attachedImages.isEmpty {
+                                Text("\(attachedImages.count) image(s)")
+                                    .font(.system(size: 10, weight: .medium))
+                                    .foregroundStyle(SlateTheme.textTertiary)
+                            }
+                        }
+                        if !attachedImages.isEmpty {
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                HStack(spacing: 6) {
+                                    ForEach(attachedImages) { img in
+                                        VStack(spacing: 2) {
+                                            if let preview = img.data.flatMap({ NSImage(data: $0) }) {
+                                                Image(nsImage: preview)
+                                                    .resizable()
+                                                    .frame(width: 60, height: 40)
+                                                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                                            }
+                                            Text(img.filename)
+                                                .font(.system(size: 8, weight: .medium))
+                                                .foregroundStyle(SlateTheme.textTertiary)
+                                                .lineLimit(1)
+                                            Text("cid:\(img.cid)")
+                                                .font(.system(size: 7, weight: .regular, design: .monospaced))
+                                                .foregroundStyle(SlateTheme.textTertiary)
+                                        }
+                                        .frame(width: 72)
+                                    }
+                                }
+                            }
+                        }
+                        Text("Use <img src=\"cid:YOUR_CID\"> in HTML to embed")
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundStyle(SlateTheme.textTertiary)
+                    }
+
+                    HStack(spacing: 6) {
+                        Button {
+                            sendEmail()
+                        } label: {
+                            SlateCapsuleButtonLabel(
+                                title: isSending ? "Sending..." : "Send Email",
+                                systemImage: "paperplane.fill",
+                                tint: SlateTheme.success,
+                                highlighted: true,
+                                density: density
+                            )
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(isSending || subject.isEmpty || htmlBody.isEmpty)
+
+                        Button {
+                            attachedImages = []
+                            subject = ""
+                            htmlBody = ""
+                            textBody = ""
+                            customEmails = ""
+                        } label: {
+                            SlateCapsuleButtonLabel(
+                                title: "Clear",
+                                systemImage: "trash",
+                                tint: SlateTheme.textPrimary,
+                                density: density
+                            )
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.leading, 4)
+            }
+        }
+    }
+
+    private func pickImages() {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = true
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowedContentTypes = [.image]
+        panel.begin { result in
+            guard result == .OK else { return }
+            for url in panel.urls {
+                let cid = "img\(attachedImages.count + 1)"
+                let data = try? Data(contentsOf: url)
+                attachedImages.append(AttachedImage(url: url, cid: cid, data: data))
+            }
+        }
+    }
+
+    private func sendEmail() {
+        isSending = true
+        let images = attachedImages.compactMap { img -> DeveloperAdminClient.EmailImage? in
+            guard let data = img.data else { return nil }
+            return DeveloperAdminClient.EmailImage(
+                filename: img.filename,
+                contentBase64: data.base64EncodedString(),
+                cid: img.cid
+            )
+        }
+
+        let recipients: DeveloperAdminClient.EitherAllOrEmails
+        if recipientMode == .custom {
+            let emails = customEmails
+                .split(separator: ",")
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .filter { !$0.isEmpty }
+            recipients = .specific(emails)
+        } else {
+            recipients = .all
+        }
+
+        model.developerSendEmail(
+            recipients: recipients,
+            subject: subject,
+            htmlBody: htmlBody,
+            textBody: textBody.isEmpty ? nil : textBody,
+            images: images
+        )
+
+        isSending = false
     }
 }
 
@@ -186,9 +430,33 @@ private struct DeveloperInstallationRow: View {
                 SlateStatusBadge(title: statusTitle, tint: statusTint)
             }
 
-            Text("Pro grants are managed by billing entitlements only.")
-                .font(.system(size: density == .compact ? 10 : 11, weight: .medium))
-                .foregroundStyle(SlateTheme.textSecondary)
+            HStack(spacing: 6) {
+                if installation.hasPro {
+                    Button {
+                        model.developerRevokePro(appUuid: installation.installation.appUuid)
+                    } label: {
+                        SlateCapsuleButtonLabel(
+                            title: "Revoke Pro",
+                            systemImage: "xmark.seal.fill",
+                            tint: SlateTheme.warning,
+                            density: density
+                        )
+                    }
+                    .buttonStyle(.plain)
+                } else {
+                    Button {
+                        model.developerGrantPro(appUuid: installation.installation.appUuid)
+                    } label: {
+                        SlateCapsuleButtonLabel(
+                            title: "Grant Pro",
+                            systemImage: "checkmark.seal.fill",
+                            tint: SlateTheme.success,
+                            density: density
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
         }
         .padding(density == .compact ? 10 : 12)
         .background(

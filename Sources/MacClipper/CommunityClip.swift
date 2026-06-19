@@ -1,5 +1,32 @@
 import Foundation
 
+enum UserStatus: String, Codable, CaseIterable, Identifiable {
+    case online
+    case idle
+    case dnd = "do_not_disturb"
+    case offline
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .online: return "Online"
+        case .idle: return "Idle"
+        case .dnd: return "Do Not Disturb"
+        case .offline: return "Offline"
+        }
+    }
+
+    var color: String {
+        switch self {
+        case .online: return "green"
+        case .idle: return "yellow"
+        case .dnd: return "red"
+        case .offline: return "gray"
+        }
+    }
+}
+
 struct CommunityClip: Identifiable, Codable {
     let id: Int
     let content: String?
@@ -24,6 +51,26 @@ struct CommunityProfile: Codable {
     let id: String
     let display_name: String?
     let avatar_url: String?
+    var status: UserStatus?
+
+    enum CodingKeys: String, CodingKey {
+        case id, display_name, avatar_url, status
+    }
+
+    init(id: String, display_name: String?, avatar_url: String?, status: UserStatus? = nil) {
+        self.id = id
+        self.display_name = display_name
+        self.avatar_url = avatar_url
+        self.status = status
+    }
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try container.decode(String.self, forKey: .id)
+        self.display_name = try container.decodeIfPresent(String.self, forKey: .display_name)
+        self.avatar_url = try container.decodeIfPresent(String.self, forKey: .avatar_url)
+        self.status = try container.decodeIfPresent(UserStatus.self, forKey: .status)
+    }
 }
 
 struct ClipComment: Identifiable, Codable {

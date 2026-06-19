@@ -33,6 +33,7 @@ struct PersistedAppSettings: Codable {
     var lastSeenLaunchSetupVersion: String?
     var hasAcknowledgedFourKProUnlock: Bool?
     var customVoiceCommandPhrase: String?
+    var userStatus: UserStatus?
 }
 
 private struct PersistedAppSettingsEnvelope: Codable {

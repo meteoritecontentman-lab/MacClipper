@@ -23,6 +23,49 @@ struct MenuSettingsPage: View {
         return nil
     }
 
+    private var statusBinding: Binding<UserStatus> {
+        Binding(
+            get: { model.userStatus },
+            set: { newValue in
+                model.userStatus = newValue
+                model.savePreferences()
+                Task {
+                    try? await CommunityClipsClient.shared.updateProfileStatus(
+                        profileID: model.websiteUserID,
+                        status: newValue
+                    )
+                }
+            }
+        )
+    }
+
+    private func statusIcon(for status: UserStatus) -> String {
+        switch status {
+        case .online: return "circle.fill"
+        case .idle: return "moon.fill"
+        case .dnd: return "minus.circle.fill"
+        case .offline: return "circle.slash.fill"
+        }
+    }
+
+    private func statusTint(for status: UserStatus) -> Color {
+        switch status {
+        case .online: return Color.green
+        case .idle: return Color.yellow
+        case .dnd: return Color.red
+        case .offline: return Color.gray
+        }
+    }
+
+    private func statusColor(_ status: UserStatus) -> Color {
+        switch status {
+        case .online: return Color.green
+        case .idle: return Color.yellow
+        case .dnd: return Color.red
+        case .offline: return Color.gray
+        }
+    }
+
     private var notificationsBinding: Binding<Bool> {
         Binding(
             get: { model.enableGameNotifications },
@@ -344,6 +387,38 @@ struct MenuSettingsPage: View {
                             )
                         }
                         .buttonStyle(.plain)
+                    }
+
+                    if !model.websiteUserID.isEmpty {
+                        VStack(spacing: 0) {
+                            SlatePanelDivider()
+                            SlateSectionCaption(title: "Presence", density: density)
+
+                            SlateRow(
+                                title: "Status",
+                                subtitle: model.userStatus.displayName,
+                                systemImage: statusIcon(for: model.userStatus),
+                                isSelected: true,
+                                tint: statusTint(for: model.userStatus),
+                                density: density
+                            ) {
+                                Picker("Status", selection: statusBinding) {
+                                    ForEach(UserStatus.allCases) { status in
+                                        HStack(spacing: 4) {
+                                            Circle()
+                                                .fill(statusColor(status))
+                                                .frame(width: 8, height: 8)
+                                            Text(status.displayName)
+                                                .tag(status)
+                                        }
+                                    }
+                                }
+                                .labelsHidden()
+                                .pickerStyle(.menu)
+                                .tint(SlateTheme.textPrimary)
+                                .frame(width: 130)
+                            }
+                        }
                     }
 
                     if model.isDeveloperBuild {

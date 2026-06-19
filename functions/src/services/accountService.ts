@@ -1301,6 +1301,39 @@ export async function getBotConfig(source: Record<string, unknown>): Promise<Rec
   return snapshot.data() as Record<string, unknown>;
 }
 
+export async function ensureOwnerPro(source: Record<string, unknown>): Promise<{ ok: boolean; appUuid?: string }> {
+  const configuredOwnerEmail = ownerEmail();
+  if (!configuredOwnerEmail) {
+    throw new ApiError(503, "Owner email not configured.");
+  }
+
+  const requestedAppUuid = sanitizeText(source.appUuid);
+  if (!requestedAppUuid) {
+    throw new ApiError(400, "appUuid is required.");
+  }
+
+  const user = await findUserByEmail(configuredOwnerEmail);
+  if (!user) {
+    return { ok: false };
+  }
+
+  if (!user.paidFeatures.includes("4k-pro")) {
+    await persistUser(user, {
+      subscriptionTier: user.subscriptionTier,
+      paidFeatures: normalizeFeatureKeys(["4k-pro", ...user.paidFeatures])
+    });
+  }
+
+  const installation = await findInstallationByAppUuid(requestedAppUuid);
+  if (installation && !installation.paidFeatures.includes("4k-pro")) {
+    await persistInstallation(installation, {
+      paidFeatures: normalizeFeatureKeys(["4k-pro", ...installation.paidFeatures])
+    });
+  }
+
+  return { ok: true, appUuid: requestedAppUuid };
+}
+
 export async function setBotConfig(source: Record<string, unknown>): Promise<Record<string, unknown>> {
   const guildId = sanitizeText(source.guildId);
   if (!guildId) {

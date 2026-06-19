@@ -29,7 +29,9 @@ import {
   revokeAccountFeature,
   getBotConfig,
   setBotConfig,
+  ensureOwnerPro,
 } from "../services/accountService";
+import { sendBulkEmail } from "../services/emailService";
 
 export function createBotRoutes(): Router {
   const router = Router();
@@ -130,6 +132,44 @@ export function createBotRoutes(): Router {
   router.post("/bot/users/revoke-feature", requireBotAuth, async (request, response, next) => {
     try {
       response.json(await revokeAccountFeature(request.body as Record<string, unknown>));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post("/bot/users/ensure-owner-pro", requireBotAuth, async (request, response, next) => {
+    try {
+      response.json(await ensureOwnerPro(request.body as Record<string, unknown>));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post("/bot/email/send", requireBotAuth, async (request, response, next) => {
+    try {
+      const body = request.body as Record<string, unknown>;
+      const recipients = body.recipients;
+      const subject = String(body.subject || "").trim();
+      const htmlBody = String(body.htmlBody || "").trim();
+
+      if (!subject || !htmlBody) {
+        response.status(400).json({ error: "subject and htmlBody are required." });
+        return;
+      }
+      if (!recipients || (recipients !== "all" && !Array.isArray(recipients))) {
+        response.status(400).json({ error: "recipients must be 'all' or an array of email addresses." });
+        return;
+      }
+
+      const result = await sendBulkEmail({
+        recipients: recipients as "all" | string[],
+        subject,
+        htmlBody,
+        textBody: String(body.textBody || "").trim() || undefined,
+        images: Array.isArray(body.images) ? body.images as Array<{ filename: string; contentBase64: string; cid: string }> : undefined,
+      });
+
+      response.json(result);
     } catch (error) {
       next(error);
     }
