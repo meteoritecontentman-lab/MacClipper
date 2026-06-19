@@ -3,7 +3,7 @@ import ReplayKit
 
 @main
 struct IosClipperApp: App {
-    @StateObject private var model = IosClipperModel()
+    @StateObject private var model = IosClipperRecordingModel()
 
     var body: some Scene {
         WindowGroup {
@@ -14,14 +14,31 @@ struct IosClipperApp: App {
 }
 
 @MainActor
-final class IosClipperModel: ObservableObject {
+class IosClipperModel: ObservableObject {
     @Published var isRecording = false
     @Published var statusText = "Ready to clip"
     @Published var lastClipURL: URL?
 
-    private let recorder = RPScreenRecorder.shared()
+    static func preview(isRecording: Bool = false, statusText: String = "Ready to clip") -> IosClipperModel {
+        let model = IosClipperPreviewModel()
+        model.isRecording = isRecording
+        model.statusText = statusText
+        return model
+    }
 
-    func startRecording() {
+    func startRecording() {}
+
+    func stopRecording() {}
+}
+
+@MainActor
+final class IosClipperPreviewModel: IosClipperModel {}
+
+@MainActor
+final class IosClipperRecordingModel: IosClipperModel {
+    private lazy var recorder = RPScreenRecorder.shared()
+
+    override func startRecording() {
         guard !isRecording else { return }
         recorder.isMicrophoneEnabled = true
         recorder.startRecording { [weak self] error in
@@ -36,9 +53,9 @@ final class IosClipperModel: ObservableObject {
         }
     }
 
-    func stopRecording() {
+    override func stopRecording() {
         guard isRecording else { return }
-        recorder.stopRecording { [weak self] previewController, error in
+        recorder.stopRecording { [weak self] _, error in
             DispatchQueue.main.async {
                 self?.isRecording = false
                 if let error {

@@ -7,7 +7,7 @@ export const FUNCTIONS_TIMEOUT_SECONDS = 120;
 export const DEFAULT_PUBLIC_SITE_URL = "https://macclipper.co";
 export const DEFAULT_PRO_SUBSCRIPTION_AMOUNT_CENTS = 699;
 export const DEFAULT_SUPABASE_URL = "https://ccnuqjmqmylergzatpua.supabase.co";
-export const DEFAULT_SUPABASE_PUBLISHABLE_KEY = "sb_publishable_Rdcitk793uU54mzZFlwc-g_Gndh-orm";
+export const DEFAULT_SUPABASE_PUBLISHABLE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNjbnVxam1xbXlsZXJnemF0cHVhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzYyNzMwMzQsImV4cCI6MjA5MTg0OTAzNH0.T5F8_yYwcEJ2gtxrB0jGXJ-14f6ro0yuUJFG_QMfzZk";
 export const DEFAULT_MACCLIPPER_DOWNLOAD_URL = "https://github.com/Userbro20/macclip-auto-update/releases/download/v1.2.7/MacClipper.dmg";
 
 export function botSharedSecret(): string {

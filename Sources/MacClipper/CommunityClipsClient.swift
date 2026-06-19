@@ -4,7 +4,7 @@ actor CommunityClipsClient {
     static let shared = CommunityClipsClient()
 
     private let supabaseURL = "https://ccnuqjmqmylergzatpua.supabase.co"
-    private let anonKey = "sb_publishable_Rdcitk793uU54mzZFlwc-g_Gndh-orm"
+    private let anonKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNjbnVxam1xbXlsZXJnemF0cHVhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzYyNzMwMzQsImV4cCI6MjA5MTg0OTAzNH0.T5F8_yYwcEJ2gtxrB0jGXJ-14f6ro0yuUJFG_QMfzZk"
 
     private var baseHeaders: [String: String] {
         [
