@@ -1,0 +1,19 @@
+User-agent: *
+Allow: /
+
+Disallow: /admin
+Disallow: /account
+Disallow: /clips
+Disallow: /community
+Disallow: /dashboard
+Disallow: /favorites
+Disallow: /favourites
+Disallow: /link-app
+Disallow: /order-confirmation
+Disallow: /profile/
+Disallow: /settings
+Disallow: /signin
+Disallow: /signup
+Disallow: /watch
+
+Sitemap: https://macclipper.co/sitemap.xml

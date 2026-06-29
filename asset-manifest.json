@@ -1,0 +1,13 @@
+{
+  "files": {
+    "main.css": "/macclipper-site/static/css/main.fa84930b.css",
+    "main.js": "/macclipper-site/static/js/main.3038b65a.js",
+    "index.html": "/macclipper-site/index.html",
+    "main.fa84930b.css.map": "/macclipper-site/static/css/main.fa84930b.css.map",
+    "main.3038b65a.js.map": "/macclipper-site/static/js/main.3038b65a.js.map"
+  },
+  "entrypoints": [
+    "static/css/main.fa84930b.css",
+    "static/js/main.3038b65a.js"
+  ]
+}
