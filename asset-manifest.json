@@ -1,13 +1,13 @@
 {
   "files": {
     "main.css": "/macclipper-site/static/css/main.b3b85f09.css",
-    "main.js": "/macclipper-site/static/js/main.9b7cd5fc.js",
+    "main.js": "/macclipper-site/static/js/main.f5283bdd.js",
     "index.html": "/macclipper-site/index.html",
     "main.b3b85f09.css.map": "/macclipper-site/static/css/main.b3b85f09.css.map",
-    "main.9b7cd5fc.js.map": "/macclipper-site/static/js/main.9b7cd5fc.js.map"
+    "main.f5283bdd.js.map": "/macclipper-site/static/js/main.f5283bdd.js.map"
   },
   "entrypoints": [
     "static/css/main.b3b85f09.css",
-    "static/js/main.9b7cd5fc.js"
+    "static/js/main.f5283bdd.js"
   ]
 }
